@@ -11,10 +11,10 @@ export const CLUBS = [
   { id: '7I', name: '7 Iron', carry: 153, loft: 33 },
   { id: '8I', name: '8 Iron', carry: 141, loft: 37 },
   { id: '9I', name: '9 Iron', carry: 128, loft: 41 },
-  { id: 'PW', name: 'Pitching Wedge', carry: 114, loft: 46 },
-  { id: 'GW', name: 'Gap Wedge', carry: 98, loft: 51 },
-  { id: 'SW', name: 'Sand Wedge', carry: 82, loft: 56 },
-  { id: 'LW', name: 'Lob Wedge', carry: 64, loft: 60 },
+  { id: 'PW', name: 'Pitching Wedge', carry: 108, loft: 46 },
+  { id: 'GW', name: 'Gap Wedge', carry: 90, loft: 51 },
+  { id: 'SW', name: 'Sand Wedge', carry: 72, loft: 56 },
+  { id: 'LW', name: 'Lob Wedge', carry: 52, loft: 60 },
   { id: 'PT', name: 'Putter', carry: 0, loft: 1 },
 ];
 

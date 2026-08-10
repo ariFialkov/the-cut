@@ -2340,7 +2340,9 @@ function frame() {
   // player cart driving
   if (phase === 'cart' && playerCart && playerCart.arrive) {
     const g = playerCart.cart.group;
-    let steer = (keys.has('KeyA') ? -1 : 0) + (keys.has('KeyD') ? 1 : 0) + ui.joy.x + aimHold;
+    // world yaw is counter-clockwise while screen-right is -X, so manual
+    // steer input is negated (the autopilot below assigns its own value)
+    let steer = (keys.has('KeyA') ? 1 : 0) - (keys.has('KeyD') ? 1 : 0) - ui.joy.x - aimHold;
     let throttle = (keys.has('KeyW') ? 1 : 0) - (keys.has('KeyS') ? 1 : 0) + ui.joy.y;
     if (window.__thecut.autopilot) {
       const want = Math.atan2(playerBall.position.x - g.position.x, playerBall.position.z - g.position.z);
