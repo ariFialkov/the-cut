@@ -262,6 +262,31 @@ window.__thecut = {
   startGame(bet) {
     if (phase === 'menu') startGame(bet || ui.bet);
   },
+  // test-only: swap in a fresh random hole and view it from above
+  galleryHole(idx = 0, low = false) {
+    if (phase !== 'menu') return null;
+    gameSeed = (Math.random() * 0xffffffff) >>> 0;
+    if (holePreview) {
+      scene.remove(holePreview.group);
+      disposeHole(holePreview);
+    }
+    holePreview = generateHole(gameSeed, idx % 5);
+    scene.add(holePreview.group);
+    hole = holePreview;
+    setCam(
+      () => {
+        if (low) {
+          cam.pos.set(hole.tee.x, hole.tee.y + 3.2, hole.tee.z + 9);
+          cam.look.set(hole.pin.x, hole.pin.y + 2, hole.pin.z);
+        } else {
+          cam.pos.set(hole.tee.x + 30, Math.max(hole.tee.y, hole.pin.y) + 60, 42);
+          cam.look.set(hole.pin.x * 0.5, (hole.tee.y + hole.pin.y) / 2, hole.pin.z * 0.55);
+        }
+      },
+      { snap: true, damp: 99 }
+    );
+    return { archetype: hole.archetype, name: hole.name };
+  },
 };
 
 // ------------------------------------------------------------------
