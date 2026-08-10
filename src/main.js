@@ -1696,7 +1696,7 @@ async function cartDriveToBall() {
   // hop in
   scene.remove(playerRig.group);
   g.add(playerRig.group);
-  playerRig.group.position.set(0.24, 0.42, -0.12);
+  playerRig.group.position.set(0.24, 0.06, -0.18);
   playerRig.group.rotation.set(0, 0, 0);
   seatedPose(playerRig);
   await new Promise((res) => (playerCart.arrive = res));
@@ -1714,7 +1714,8 @@ async function raceLoop() {
   for (const bi of game.aliveBots) {
     const plan = raceState.plans.get(bi);
     plan.cart = buildCart(botLook(bi).shirt);
-    plan.cart.group.position.copy(botTeePos(bi)).add(new THREE.Vector3(1.3, 0, 2));
+    const gx = game.gates.get(bi);
+    plan.cart.group.position.set(gx + (gx >= 0 ? 5 : -5), 0, 3.5);
     plan.cart.group.position.y = hole.heightAt(plan.cart.group.position.x, plan.cart.group.position.z);
     scene.add(plan.cart.group);
     raceCarts.push(plan.cart);
