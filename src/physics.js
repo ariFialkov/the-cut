@@ -51,7 +51,9 @@ export class BallFlight {
     this.wind = o.wind ? o.wind.clone() : new THREE.Vector3();
     this.hole = o.hole;
     this.liftK = liftK(o.loftDeg);
-    this.rolling = false;
+    // a putt is rolling from the first instant — never treated as a tiny
+    // flight whose "landing" would bleed speed through bounce friction
+    this.rolling = o.loftDeg <= 2;
     this.done = false;
     this.age = 0;
     this.apex = this.pos.y;

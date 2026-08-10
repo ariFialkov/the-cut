@@ -895,11 +895,11 @@ function beginAim() {
 // full stroke runs ~1.35x the distance to the cup. The green's real slopes
 // then break the ball on its way.
 function puttFromMetrics(m, pinDist) {
-  const maxRoll = Math.max(4, pinDist * 1.35);
+  const maxRoll = Math.max(4.5, pinDist * 1.45);
   const p = clamp(0.12 + 0.92 * Math.min(m.backFrac, 1.1), 0.1, 1.2);
   let roll = maxRoll * p;
-  roll *= 1 - 0.12 * m.wobble; // chunky stroke comes up short
-  roll *= 1 + clamp(m.paceRatio - 1, -0.4, 0.6) * 0.1;
+  roll *= 1 - 0.08 * m.wobble; // chunky stroke comes up a touch short
+  roll *= 1 + clamp(m.paceRatio - 1, -0.5, 0.8) * 0.22; // charging it really sends it
   const v0 = Math.sqrt(2 * 2.7 * roll);
   const pushDeg = clamp(m.angleDeg * 0.3, -5, 5) + (Math.random() * 2 - 1) * m.scatter * 2.2;
   const quality = 1 - clamp(0.5 * m.wobble + 0.3 * m.scatter + 0.2 * Math.abs(m.paceRatio - 1), 0, 1);
