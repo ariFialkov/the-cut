@@ -192,23 +192,25 @@ function buildYouSign() {
   ctx.fillStyle = '#35e07c';
   ctx.fill();
   const tex = new THREE.CanvasTexture(c);
+  // fog:false — the beacon must stay full-strength at any distance
   const sprite = new THREE.Sprite(
-    new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false })
+    new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false, fog: false })
   );
   sprite.scale.set(6, 3.75, 1);
   const group = new THREE.Group();
   group.add(sprite);
   const beam = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.16, 0.34, 9, 8, 1, true),
+    new THREE.CylinderGeometry(0.16, 0.4, 13, 8, 1, true),
     new THREE.MeshBasicMaterial({
       color: 0x35e07c,
       transparent: true,
-      opacity: 0.22,
+      opacity: 0.25,
       depthWrite: false,
+      fog: false,
       side: THREE.DoubleSide,
     })
   );
-  beam.position.y = -5.5;
+  beam.position.y = -7;
   group.add(beam);
   group.visible = false;
   scene.add(group);
@@ -1796,11 +1798,13 @@ function cartFloatY(cart, x, z, inWater, dt) {
       sfx.splash();
     }
   }
+  // Y is NOT eased through the morph — the hull rides the surface from the
+  // moment it's in water (the bank slopes make the hand-off continuous),
+  // only the wheels/pontoons animate.
   const ground = hole.heightAt(x, z);
-  if (mix <= 0.001) return ground;
+  if (!inWater) return ground;
   const bob = Math.sin(clockT * 2.3 + x * 0.1) * 0.06;
-  const float = Math.max(ground, hole.waterLevel + 0.04 + bob);
-  return lerp(ground, float, mix);
+  return Math.max(ground, hole.waterLevel + 0.04 + bob);
 }
 
 function moveBotCart(plan, x, z, dt) {
@@ -2371,7 +2375,8 @@ function frame() {
           g.position.y + 4,
           g.position.z - Math.cos(playerCart.heading) * 8
         );
-        const minY = hole.heightAt(cam.pos.x, cam.pos.z) + 1.6;
+        // never dip under the water surface, even where the bed is carved deep
+        const minY = Math.max(hole.heightAt(cam.pos.x, cam.pos.z), hole.waterLevel) + 1.6;
         if (cam.pos.y < minY) cam.pos.y = minY;
         cam.look.set(g.position.x, g.position.y + 1.2, g.position.z);
       },
@@ -2475,7 +2480,7 @@ function frame() {
     const bp = playerBall.position;
     youSign.group.position.set(bp.x, bp.y + 6.5 + Math.sin(clockT * 2) * 0.4, bp.z);
     const dCam = camera.position.distanceTo(youSign.group.position);
-    const s = clamp(dCam * 0.045, 0.8, 2.6);
+    const s = clamp(dCam * 0.05, 0.8, 4.5);
     youSign.sprite.scale.set(6 * s, 3.75 * s, 1);
   } else if (youSign) {
     youSign.group.visible = false;
