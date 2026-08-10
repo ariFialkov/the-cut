@@ -593,7 +593,13 @@ function windRelDeg() {
 // ------------------------------------------------------------------
 
 function newMap() {
-  gameSeed = (Math.random() * 0xffffffff) >>> 0;
+  const urlSeed = new URLSearchParams(location.search).get('seed');
+  gameSeed =
+    window.__thecut && window.__thecut.forceSeed
+      ? window.__thecut.forceSeed >>> 0
+      : urlSeed
+        ? urlSeed >>> 0
+        : (Math.random() * 0xffffffff) >>> 0;
   if (hole && hole !== holePreview) {
     scene.remove(hole.group);
     disposeHole(hole);
