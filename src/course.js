@@ -21,15 +21,16 @@ export function generateHole(seed, idx) {
   const rng = mulberry32((seed ^ Math.imul(idx + 1, 0x9e3779b9)) >>> 0);
   const ns = Math.floor(rng() * 1e9);
 
-  // Final hole is always the dramatic island green.
-  const archetype = idx === 4 ? 'island' : ARCHETYPES[Math.floor(rng() * 5)];
+  // Final hole is the wheel: a dramatic island with a giant flat green.
+  const isWheel = idx === 4;
+  const archetype = isWheel ? 'island' : ARCHETYPES[Math.floor(rng() * 5)];
 
   let L = 100 + rng() * 95;
   if (archetype === 'island') L = 130 + rng() * 50;
   if (archetype === 'carry') L = 125 + rng() * 70;
 
-  const bend = (rng() - 0.5) * 34;
-  const greenR = 8 + rng() * 5;
+  const bend = isWheel ? (rng() - 0.5) * 10 : (rng() - 0.5) * 34;
+  const greenR = isWheel ? 14.5 : 8 + rng() * 5;
   const gx = bend;
   const gz = -L;
 
@@ -70,7 +71,8 @@ export function generateHole(seed, idx) {
   }
 
   const trendAt = (t) => lerp(0, greenH, smoothstep(0.15, 0.9, clamp(t, -0.3, 1.3)));
-  const waterLevel = hasWater ? trendAt(waterRepT) - 1.7 : -999;
+  // water must sit below BOTH the tee (y=0) and the green, or they flood
+  const waterLevel = hasWater ? Math.min(trendAt(waterRepT), 0, greenH) - 1.7 : -999;
 
   const centerAt = (t) => bend * smoothstep(0, 1, clamp(t, 0, 1));
 
@@ -121,7 +123,7 @@ export function generateHole(seed, idx) {
     const flatten = Math.max(greenMask, teeMask, fwMask * 0.8);
 
     let h = trend + base * (1 - 0.88 * flatten);
-    h += greenMask * fbm(x * 0.06, z * 0.06, ns + 13, 2) * 0.35;
+    if (!isWheel) h += greenMask * fbm(x * 0.06, z * 0.06, ns + 13, 2) * 0.35;
 
     const wm = waterFn(x, z, t, dG);
     if (wm > 0.02) h = lerp(h, waterLevel - 2.4, smoothstep(0.1, 0.7, wm));
@@ -151,8 +153,9 @@ export function generateHole(seed, idx) {
   const hole = {
     idx,
     seed,
+    isWheel,
     archetype,
-    name: pick(rng, HOLE_NAMES[archetype]),
+    name: isWheel ? 'The Wheel' : pick(rng, HOLE_NAMES[archetype]),
     length: L,
     greenR,
     greenCenter: new THREE.Vector3(gx, 0, gz),
@@ -311,14 +314,6 @@ function buildMeshes(hole, rng, ns) {
   flagGroup.position.copy(hole.pin);
   group.add(flagGroup);
   hole.flagMesh = flag;
-
-  // ---- tee markers ----
-  const markMat = new THREE.MeshLambertMaterial({ color: 0xe8453c });
-  for (const s of [-1, 1]) {
-    const m = new THREE.Mesh(new THREE.SphereGeometry(0.14, 8, 6), markMat);
-    m.position.set(s * 1.4, hole.heightAt(s * 1.4, 0) + 0.12, 0);
-    group.add(m);
-  }
 
   // ---- trees ----
   const treeSpots = [];

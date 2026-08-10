@@ -7,9 +7,15 @@ import { shuffle } from './rng.js';
 
 export const RTP = 0.96;
 
-// Payout multiplier by finishing position (1st..5th).
-// Uniform 20% chance of each position => EV = 0.2 * (3.0+1.4+0.4) = 0.96.
-export const MULTS = [3.0, 1.4, 0.4, 0, 0];
+// Payout multiplier by finishing position (1st..5th). The champion's base
+// prize is then multiplied by the bonus wheel (below).
+export const MULTS = [2.0, 1.4, 0.4, 0, 0];
+
+// Champion's Hole bonus wheel: 12 equal sectors, drawn uniformly.
+// E[wheel] = (7*1 + 2*1.25 + 1.5 + 2 + 5) / 12 = 18/12 = 1.5, so the
+// expected champion payout is 2.0 * 1.5 = 3.0x and total RTP stays
+// 0.2 * (2.0*1.5 + 1.4 + 0.4) = 0.96.
+export const WHEEL = [1, 1.25, 1, 2, 1, 1.5, 1, 5, 1, 1.25, 1, 1];
 
 export const BETS = [10, 25, 50, 100, 250];
 
@@ -32,12 +38,17 @@ export function saveBalance(b) {
   } catch {}
 }
 
-// Draw the script for a game: the player's finish plus each bot's finish.
+// Draw the script for a game: the player's finish, each bot's finish, and
+// the wheel sector that will come up if the player takes the title.
 // botFinish[i] is the finishing position of bot i (0..3).
 export function makeRig(rng) {
   const playerFinish = 1 + Math.floor(rng() * 5);
   const rest = [1, 2, 3, 4, 5].filter((p) => p !== playerFinish);
-  return { playerFinish, botFinish: shuffle(rng, rest) };
+  return {
+    playerFinish,
+    botFinish: shuffle(rng, rest),
+    wheelIdx: Math.floor(rng() * WHEEL.length) % WHEEL.length,
+  };
 }
 
 // Given the player's actual distance this round, produce each alive bot's

@@ -32,6 +32,7 @@ export class UI {
       aimRight: $('aim-right'),
       clubPrev: $('club-prev'),
       clubNext: $('club-next'),
+      ffwd: $('ffwd'),
       btnPlay: $('btn-play'),
       toast: $('toast'),
       trail: $('trail'),
@@ -176,6 +177,11 @@ export class UI {
     $('club-carry').textContent = `${yd(club.carry)} yd${effNote ? ' · ' + effNote : ''}`;
   }
 
+  showFfwd(v) {
+    this.el.ffwd.classList.toggle('hidden', !v);
+    if (!v) this.el.ffwd.classList.remove('held');
+  }
+
   setControlsVisible(v) {
     const method = v ? 'remove' : 'add';
     this.el.aimLeft.classList[method]('hidden');
@@ -280,7 +286,7 @@ export class UI {
   }
 
   // ---------- results ----------
-  showResults({ pos, payout, bet, balance, standings, onAgain, onMenu }) {
+  showResults({ pos, payout, bet, balance, standings, wheel, onAgain, onMenu }) {
     const r = this.el.results;
     r.classList.remove('hidden');
     const ordinal = ['1st', '2nd', '3rd', '4th', '5th'][pos - 1];
@@ -288,6 +294,9 @@ export class UI {
     const posEl = $('results-pos');
     posEl.textContent = pos === 1 ? '🏆 1st' : ordinal;
     posEl.className = 'results-pos ' + (pos === 1 ? 'win' : pos > 3 ? 'lose' : '');
+    const wheelEl = $('results-wheel');
+    wheelEl.classList.toggle('hidden', !wheel);
+    if (wheel) wheelEl.textContent = `WHEEL BONUS ×${wheel}`;
     $('results-payout').textContent = payout > 0 ? `+${payout.toFixed(0)} 🪙 (bet ${bet})` : `bet ${bet} lost`;
     const ul = $('results-standings');
     ul.innerHTML = '';

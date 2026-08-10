@@ -33,7 +33,7 @@
         <div class="bet-panel">
           <div class="bet-label">YOUR BET <span class="balance">🪙 <b id="menu-balance">0</b></span></div>
           <div id="bet-row" class="bet-row"></div>
-          <div class="paytable">1st <b>×3.0</b> · 2nd <b>×1.4</b> · 3rd <b>×0.4</b> <span class="rtp">RTP 96%</span></div>
+          <div class="paytable">1st <b>×2.0 × wheel</b> · 2nd <b>×1.4</b> · 3rd <b>×0.4</b> <span class="rtp">RTP 96%</span></div>
         </div>
         <button id="btn-play" class="btn-primary">TEE OFF</button>
         <button id="btn-howto" class="btn-ghost">How to play</button>
@@ -54,6 +54,7 @@
           <li><b>Smooth</b> — jerky speed sprays your aim.</li>
         </ul>
         <p>Each hole, the golfer <b>furthest from the pin</b> is cut. Outlast everyone for the top prize.</p>
+        <p><b>The Wheel</b> — win it all and you tee off at a giant spinning prize wheel. Wherever your ball ends up, the wheel decides your bonus: <b>×1 up to ×5</b> on the champion's prize.</p>
         <button id="btn-howto-close" class="btn-primary">Got it</button>
       </div>
     </div>
@@ -85,6 +86,7 @@
       <div id="aim-right" class="aim-zone aim-right"><span>▶</span></div>
       <div id="feedback" class="feedback hidden"></div>
       <div id="shot-result" class="shot-result hidden"></div>
+      <div id="ffwd" class="ffwd hidden">⏩ <span>hold 2×</span></div>
       <div class="hud-bottom">
         <div id="swing-hint" class="swing-hint">drag <b>↓</b> then <b>↑</b> to swing</div>
         <div class="club-select">
@@ -118,6 +120,7 @@
       <div class="panel results-panel">
         <div id="results-title" class="results-title"></div>
         <div id="results-pos" class="results-pos"></div>
+        <div id="results-wheel" class="results-wheel hidden"></div>
         <div id="results-payout" class="results-payout"></div>
         <ul id="results-standings"></ul>
         <div class="results-balance">Balance: 🪙 <b id="results-balance">0</b></div>

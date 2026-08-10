@@ -15,14 +15,16 @@ function liftK(loftDeg) {
   return 0.0009 + (loftDeg / 60) * 0.0013;
 }
 
-// Restitution / friction / rolling decel per surface.
+// Restitution / friction / rolling decel per surface. Grass grabs: the
+// rough kills a ball almost immediately, fairway checks it up quickly,
+// the green lets it run out a little.
 const SURF = {
-  green: { e: 0.34, f: 0.18, roll: 1.5 },
-  fringe: { e: 0.32, f: 0.22, roll: 2.4 },
-  tee: { e: 0.36, f: 0.2, roll: 2.2 },
-  fairway: { e: 0.36, f: 0.22, roll: 2.3 },
-  rough: { e: 0.2, f: 0.45, roll: 6.0 },
-  sand: { e: 0.03, f: 0.85, roll: 12.0 },
+  green: { e: 0.3, f: 0.26, roll: 2.7 },
+  fringe: { e: 0.27, f: 0.32, roll: 3.8 },
+  tee: { e: 0.3, f: 0.32, roll: 4.2 },
+  fairway: { e: 0.3, f: 0.32, roll: 4.2 },
+  rough: { e: 0.14, f: 0.58, roll: 10.0 },
+  sand: { e: 0.02, f: 0.9, roll: 15.0 },
   water: { e: 0, f: 1, roll: 0 },
 };
 
@@ -59,18 +61,20 @@ export class BallFlight {
   }
 
   // Advance by frame dt; returns array of events fired this frame:
-  // {type:'bounce'|'splash'|'rest'|'holed', pos, speed}
+  // {type:'bounce'|'splash'|'rest', pos, speed}
+  // Integration is quantized to fixed substeps via an accumulator, so a
+  // flight is bit-identical no matter how dt is sliced — which lets the
+  // game pre-simulate a shot's outcome the moment it is struck.
   step(dt) {
     const out = [];
     if (this.done) return out;
-    let t = 0;
-    while (t < dt && !this.done) {
-      const h = Math.min(SUBSTEP, dt - t);
-      this._sub(h, out);
-      t += h;
+    this._tacc = (this._tacc || 0) + dt;
+    while (this._tacc >= SUBSTEP - 1e-9 && !this.done) {
+      this._sub(SUBSTEP, out);
+      this._tacc -= SUBSTEP;
+      this.age += SUBSTEP;
     }
-    this.age += dt;
-    if (this.age > 25 && !this.done) {
+    if (this.age > 22 && !this.done) {
       this.done = true;
       out.push({ type: 'rest', pos: this.pos.clone(), speed: 0 });
     }
@@ -157,8 +161,8 @@ export class BallFlight {
       const n = this._normalAt(p.x, p.z);
       // gravity along slope
       const gAlong = G * n.y;
-      v.x += -n.x * gAlong * h * 1.6;
-      v.z += -n.z * gAlong * h * 1.6;
+      v.x += -n.x * gAlong * h;
+      v.z += -n.z * gAlong * h;
       v.y = 0;
       const sp = Math.hypot(v.x, v.z);
       if (sp > 0.001) {
@@ -175,7 +179,7 @@ export class BallFlight {
         return;
       }
       p.y = ground + BALL_R;
-      if (Math.hypot(v.x, v.z) < 0.35) {
+      if (Math.hypot(v.x, v.z) < 0.55) {
         v.set(0, 0, 0);
         this.done = true;
         out.push({ type: 'rest', pos: p.clone(), speed: 0, surf });
@@ -192,6 +196,41 @@ export class BallFlight {
     const n = new THREE.Vector3(hl - hr, 2 * e, hd - hu);
     return n.normalize();
   }
+}
+
+// Run a flight to rest synchronously (integration is deterministic, so a
+// visual replay with identical params ends in exactly the same spot).
+export function simulateToRest(opts) {
+  const f = new BallFlight(opts);
+  for (let i = 0; i < 3000 && !f.done; i++) f.step(1 / 60);
+  return { pos: f.pos.clone(), inWater: !!f.inWater };
+}
+
+// Find the launch speed that makes a bot's ball — with full bounce and
+// roll — come to rest (approximately) at targetPoint. Returns the launch
+// params plus the exact simulated resting position.
+export function solveBotShot({ start, targetPoint, hole, wind, loftDeg = 30, curveDeg = 0 }) {
+  const dir = new THREE.Vector3(targetPoint.x - start.x, 0, targetPoint.z - start.z);
+  const want = dir.length();
+  dir.normalize();
+  const along = (p) => (p.x - start.x) * dir.x + (p.z - start.z) * dir.z;
+
+  let lo = 8;
+  let hi = 100;
+  let sim = null;
+  for (let i = 0; i < 13; i++) {
+    const mid = (lo + hi) / 2;
+    sim = simulateToRest({ pos: start, dir, v0: mid, loftDeg, curveDeg, wind, hole });
+    const d = sim.inWater ? along(sim.pos) : along(sim.pos);
+    if (d < want) lo = mid;
+    else hi = mid;
+    if (Math.abs(d - want) < 0.35) {
+      return { dir, v0: mid, loftDeg, curveDeg, sim };
+    }
+  }
+  const v0 = (lo + hi) / 2;
+  sim = simulateToRest({ pos: start, dir, v0, loftDeg, curveDeg, wind, hole });
+  return { dir, v0, loftDeg, curveDeg, sim };
 }
 
 // ---- Club speed calibration ----

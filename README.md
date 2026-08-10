@@ -49,20 +49,29 @@ opponents are bots, and the game is engineered so the *outcome* is
 deterministic while the *show* is real:
 
 - Before the lobby even fills, the player's finishing position (1st–5th) is
-  drawn uniformly (20% each). With payout multipliers of **×3.0 / ×1.4 / ×0.4 /
-  ×0 / ×0** by position, expected return is `0.2 × (3.0 + 1.4 + 0.4) = 0.96` —
-  a **96% RTP**, independent of skill. Prizes scale linearly with the bet.
+  drawn uniformly (20% each), along with the bonus-wheel sector used if they
+  win. Payout multipliers by position are **×2.0×wheel / ×1.4 / ×0.4 / ×0 /
+  ×0**, where the 12-sector wheel `[×1 ×7, ×1.25 ×2, ×1.5, ×2, ×5]` has
+  `E[wheel] = 1.5`. Expected return is
+  `0.2 × (2.0×1.5 + 1.4 + 0.4) = 0.96` — a **96% RTP**, independent of skill,
+  with no leakage from the wheel. Prizes scale linearly with the bet.
 - Each bot is also assigned a finishing position, which fixes exactly who gets
   cut on every hole.
 - The player's shot is fully physically simulated — your swing quality decides
-  where your ball actually lands. The bots then hit *around* that result:
-  on a hole the player is scripted to survive, the doomed bot always lands
-  farther out; on the player's elimination hole, every remaining bot sneaks
-  inside the player's ball (and a would-be ace "lips out" so the script can
-  never be beaten).
-- Positions 1–4 are decided across holes 1–4 (one cut per hole). Hole 5 is the
-  **Champion's Hole** — a ceremonial victory shot for the winner, which is what
-  makes the game a 5-step ladder with 5 players.
+  where your ball actually lands. Because the integrator is deterministic, the
+  outcome is pre-simulated at the instant of contact, so all five golfers tee
+  off simultaneously from their own gates: bot shots are real physics flights
+  whose launch speed is *solved* (bisection over pre-simulations) to bounce and
+  roll to a resting spot on the scripted side of the player's ball. On the
+  player's elimination hole every remaining bot sneaks inside them (a would-be
+  ace "lips out" so the script can never be beaten); otherwise the doomed bot
+  always finishes farthest. The head-to-head final is sequential for drama:
+  player first, then the last bot answers.
+- Positions 1–4 are decided across holes 1–4 (one cut per hole). Hole 5 is
+  **The Wheel** — the champion tees off at a giant spinning prize wheel sunk
+  into the green. Wherever the ball rests, the wheel brakes so the pre-drawn
+  sector lands under it; a miss gets a free drop. Every sector pays at least
+  ×1 of the champion prize.
 
 Balance is stored locally (`localStorage`) and starts at 1000 coins — this is a
 demo economy with a free refill when you bust.
