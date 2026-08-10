@@ -849,7 +849,7 @@ function onStrike(metrics, _pts) {
   // Integration is deterministic, so we know the outcome the moment the
   // ball is struck — which lets the whole field play simultaneously.
   const predicted = simulateToRest(flightParams);
-  if (game.mode === 'ctp') {
+  if (game.mode === 'ctp' || game.mode === 'wheel') {
     game.pendingOutcome = officialize(predicted);
     dlog('predicted:', game.pendingOutcome.dist.toFixed(1) + 'm', game.pendingOutcome.wet ? 'WET' : '');
     if (game.holeIdx === 0 && game.aliveBots.length > 1) {
