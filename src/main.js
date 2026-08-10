@@ -17,7 +17,8 @@ import {
   idleUpdate,
 } from './golfer.js';
 import { MULTS, BETS, WHEEL, loadBalance, saveBalance, makeRig, botDistances, finalStandings } from './economy.js';
-import { UI, sleep, ICO } from './ui.js';
+import { UI, sleep, ICO, fmtTime } from './ui.js';
+import { buildCart, disposeCart } from './cart.js';
 import { sfx } from './sfx.js';
 import { mulberry32, clamp, lerp, shuffle } from './rng.js';
 
@@ -238,6 +239,11 @@ let gateMarkers = [];
 let wheelObj = null;
 let timeScale = 1; // 2 while the fast-forward button is held
 let swingTween = null;
+let playerCart = null; // {cart, arriveResolve} while driving
+let raceState = null; // hole-3 time race state
+const MODES = ['ctp', 'strokes', 'race', 'ctp', 'wheel'];
+const GIMME_R = 1.1; // inside this = automatic tap-in
+const HOLED_R = 0.55; // inside this = in the hole
 let celebrating = null;
 let dejected = null;
 let clockT = 0;
@@ -245,6 +251,7 @@ let clockT = 0;
 // debug/test hook
 window.__thecut = {
   forceFinish: 0, // test-only: fix the drawn finishing position (1..5)
+  autopilot: false, // test-only: cart steers itself to the ball
   get phase() {
     return phase;
   },
@@ -548,6 +555,16 @@ function menuState() {
   botBalls.forEach((b) => scene.remove(b));
   botBalls = [];
   botShots = [];
+  raceState = null;
+  clearRaceCarts();
+  if (playerCart) {
+    scene.remove(playerCart.cart.group);
+    disposeCart(playerCart.cart);
+    playerCart = null;
+  }
+  ui.setStrokeInfo(null);
+  ui.setRaceTimer(null);
+  ui.setStatusRows(null);
   clearGates();
   clearWheel();
   hideAimUI();
@@ -641,19 +658,26 @@ async function startGame(bet) {
   ui.showHud();
 
   dlog('rig', JSON.stringify(game.rig));
-  // holes 1-4: closest to the pin, furthest is cut
+  // hole 1: closest to pin · hole 2: stroke play · hole 3: time race ·
+  // hole 4: head-to-head closest to pin. Furthest/most/slowest is cut.
   for (let i = 0; i < 4; i++) {
     game.holeIdx = i;
     dlog('hole', i + 1, 'start');
     await loadHole(i);
     await flyover(i);
-    // finals: the semifinal winner has earned the second slot. If that's
-    // the player, the bot opens the head-to-head.
-    if (i === 3 && game.rig.semiWinnerIsPlayer) {
-      await finalsBotOpener();
+    if (game.mode === 'strokes') {
+      await strokePlayLoop();
+    } else if (game.mode === 'race') {
+      await raceLoop();
+    } else {
+      // finals: the semifinal winner has earned the second slot. If that's
+      // the player, the bot opens the head-to-head.
+      if (i === 3 && game.rig.semiWinnerIsPlayer) {
+        await finalsBotOpener();
+      }
+      await takeShot();
+      await botsPhase();
     }
-    await takeShot();
-    await botsPhase();
     await boardPhase();
     dlog('hole', i + 1, 'done, playerAlive =', game.playerAlive);
     if (!game.playerAlive) break;
@@ -693,6 +717,21 @@ async function loadHole(i) {
   game.pendingOutcome = null;
   game.botVolley = null;
   game.openerDone = false;
+  game.mode = MODES[i];
+  game.playerStrokes = 0;
+  game.playerHoled = false;
+  game.playerTeeCarry = 0;
+  game.botPlay = null;
+  raceState = null;
+  clearRaceCarts();
+  if (playerCart) {
+    scene.remove(playerCart.cart.group);
+    disposeCart(playerCart.cart);
+    playerCart = null;
+  }
+  ui.setStrokeInfo(null);
+  ui.setRaceTimer(null);
+  ui.setStatusRows(null);
 
   // golfers into their gates, player ball on their tee
   playerRig.group.visible = true;
@@ -710,7 +749,7 @@ async function loadHole(i) {
 
   aimTheta = 0;
   clubIdx = recommendClubIndex(effectiveDist());
-  ui.setHole(i + 1, hole.name, hole.length);
+  ui.setHole(i + 1, hole.name, hole.length, hole.par);
   ui.setStep(i, game.playerAlive ? -1 : game.holeIdx);
 }
 
@@ -736,10 +775,16 @@ async function flyover(i) {
     { snap: true, damp: 99 }
   );
   const windMph = Math.round(hole.windSpeed * 2.237);
+  const modeTag =
+    game && game.mode === 'strokes'
+      ? 'STROKE PLAY — most strokes is cut · '
+      : game && game.mode === 'race'
+        ? 'TIME RACE — slowest to hole out is cut · '
+        : '';
   await ui.showBanner(
     `HOLE ${i + 1}`,
-    `“${hole.name}” · ${yd(hole.length)} yd · wind ${windMph} mph`,
-    2400
+    `${modeTag}“${hole.name}” · par ${hole.par} · ${yd(hole.length)} yd · wind ${windMph} mph`,
+    game && (game.mode === 'strokes' || game.mode === 'race') ? 3000 : 2400
   );
 }
 
@@ -756,6 +801,8 @@ function beginAim() {
   phase = 'aim';
   ui.setControlsVisible(true);
   ui.setStep(game.holeIdx, -1);
+  aimTheta = 0;
+  clubIdx = recommendClubIndex(effectiveDist()); // fresh caddie pick per lie
   refreshAimUI();
   setPose(playerRig, 0);
   placeGolferAtBall(playerRig, aimDir());
@@ -797,15 +844,25 @@ function onStrike(metrics, _pts) {
   };
   activeFlight = new BallFlight(flightParams);
   trailReset();
-  ui.showFfwd(true);
+  ui.showFfwd(game.mode !== 'race'); // in the race, time IS the score
 
   // Integration is deterministic, so we know the outcome the moment the
-  // ball is struck — which lets the whole field tee off simultaneously.
+  // ball is struck — which lets the whole field play simultaneously.
   const predicted = simulateToRest(flightParams);
-  game.pendingOutcome = officialize(predicted);
-  dlog('predicted:', game.pendingOutcome.dist.toFixed(1) + 'm', game.pendingOutcome.wet ? 'WET' : '');
-  if (game.holeIdx < 4 && game.aliveBots.length > 1) {
-    scheduleBotVolley(game.pendingOutcome.dist);
+  if (game.mode === 'ctp') {
+    game.pendingOutcome = officialize(predicted);
+    dlog('predicted:', game.pendingOutcome.dist.toFixed(1) + 'm', game.pendingOutcome.wet ? 'WET' : '');
+    if (game.holeIdx === 0 && game.aliveBots.length > 1) {
+      scheduleBotVolley(game.pendingOutcome.dist);
+    }
+  } else {
+    game.pendingFull = predicted;
+    const predHoled = !predicted.inWater && pinDistOf(predicted.pos) < GIMME_R;
+    if (game.mode === 'strokes') {
+      launchBotStrokesRound(predicted, predHoled);
+    } else if (game.mode === 'race' && predHoled) {
+      raceForceFinishFastBots();
+    }
   }
 
   // chase cam
@@ -869,7 +926,103 @@ function officialize(result) {
   return { dist, wet, ace, lipOut };
 }
 
+// Find a dry drop spot walking back from a splash toward the tee.
+function dropPoint(entry) {
+  const dir = new THREE.Vector3().subVectors(hole.tee, entry);
+  dir.y = 0;
+  const len = dir.length();
+  dir.normalize();
+  for (let d = 4; d < len; d += 2.5) {
+    const x = entry.x + dir.x * d;
+    const z = entry.z + dir.z * d;
+    if (hole.surfaceAt(x, z) !== 'water' && !hole.inWaterZone(x, z)) {
+      return new THREE.Vector3(x, hole.heightAt(x, z) + BALL_R, z);
+    }
+  }
+  return hole.tee.clone().add(new THREE.Vector3(0, BALL_R, 0));
+}
+
+// sink the player ball into the cup with a short roll
+async function sinkPlayerBall() {
+  const from = playerBall.position.clone();
+  const d = pinDistOf(from);
+  if (d > 0.1) {
+    await runTask((t) => {
+      const k = Math.min(1, t / Math.min(1.0, 0.25 + d * 0.35));
+      playerBall.position.lerpVectors(from, hole.pin, k);
+      playerBall.position.y = hole.heightAt(playerBall.position.x, playerBall.position.z) + BALL_R;
+      return k >= 1;
+    });
+  }
+  playerBall.visible = false;
+  spawnRing(hole.pin, 0xffffff, 1.5, 0.4);
+  sfx.onGreen();
+}
+
+// Full-hole resolution (stroke play & race): counts strokes, handles the
+// gimme, water penalty drops, and holing out.
+async function afterLandingFull(result) {
+  const dist = pinDistOf(result.pos);
+  let holed = false;
+  game.playerStrokes++;
+
+  if (game.playerStrokes === 1) {
+    game.playerTeeCarry = Math.hypot(result.pos.x - hole.tee.x, result.pos.z - hole.tee.z);
+  }
+
+  if (result.inWater) {
+    game.playerStrokes++; // penalty
+    ui.showFeedback('PENALTY +1', '#ff8a7f', 1500);
+    const drop = dropPoint(result.pos);
+    await sleep(900);
+    playerBall.visible = true;
+    playerBall.position.copy(drop);
+    spawnRing(drop, 0xffffff, 1.5, 0.4);
+    ui.showShotResult(`${ICO.wet} drop — hitting ${game.playerStrokes + 1}`, 1800);
+  } else if (dist < HOLED_R) {
+    holed = true;
+    ui.showFeedback(game.playerStrokes === 1 ? 'ACE!!' : 'IN THE HOLE!', '#ffd24a', 1700);
+    sfx.cheer();
+    await sinkPlayerBall();
+  } else if (dist < GIMME_R) {
+    holed = true;
+    game.playerStrokes++; // the tap-in
+    ui.showFeedback('GIMME', '#35e07c', 1400);
+    await sinkPlayerBall();
+  } else {
+    ui.showShotResult(`${fmtDist(dist)} out — hitting ${game.playerStrokes + 1}`, 1800);
+  }
+
+  if (!holed && game.playerStrokes >= 7) {
+    // mercy pickup
+    holed = true;
+    game.playerStrokes = 8;
+    ui.showFeedback('PICKED UP', '#ff8a7f', 1500);
+  }
+
+  if (holed) {
+    game.playerHoled = true;
+    if (game.mode === 'race' && raceState) {
+      raceState.playerTime = raceState.t;
+      dlog('player race time:', fmtTime(raceState.playerTime));
+    }
+  }
+  ui.setStrokeInfo(
+    game.mode === 'strokes' ? `STROKE ${Math.min(game.playerStrokes + 1, 8)}` : null
+  );
+
+  await sleep(holed ? 1200 : 800);
+  if (shotDone) {
+    const r = shotDone;
+    shotDone = null;
+    r({ holed, pos: result.pos });
+  }
+}
+
 async function afterLanding(result) {
+  if (game.mode === 'strokes' || game.mode === 'race') {
+    return afterLandingFull(result);
+  }
   const o = game.pendingOutcome || officialize(result);
   const { dist, wet, ace, lipOut } = o;
   if (lipOut) {
@@ -1005,18 +1158,11 @@ function scheduleBotVolley(playerDist) {
     }
   } else {
     let survivorMax = 0;
-    // the semifinal decides finals honors: the drawn semifinal winner must
-    // actually finish closer, so pin the surviving bot to the right side
-    const semiFinal = game.holeIdx === 2 && game.rig.playerFinish <= 2;
     for (const bi of game.aliveBots) {
       if (bi === outBot) continue;
-      let c = { lessThan: script.get(outBot) - 0.8 };
-      if (semiFinal) {
-        c = game.rig.semiWinnerIsPlayer
-          ? { greaterThan: playerDist + 0.3, lessThan: script.get(outBot) - 0.8 }
-          : { lessThan: Math.min(playerDist - 0.3, script.get(outBot) - 0.8) };
-      }
-      const solved = solveBotConstrained(botTeePos(bi), script.get(bi), c);
+      const solved = solveBotConstrained(botTeePos(bi), script.get(bi), {
+        lessThan: script.get(outBot) - 0.8,
+      });
       game.dists.set(bi, solved.official);
       survivorMax = Math.max(survivorMax, solved.official.dist);
       jobs.push(botSwingAndLaunch(bi, solved, 0.15 + Math.random() * 0.85));
@@ -1154,6 +1300,466 @@ async function finalDuelBotShot() {
   await sleep(1400);
 }
 
+// ------------------------------------------------------------------
+//  Hole 2: stroke play (full hole, most strokes is cut)
+// ------------------------------------------------------------------
+
+const doomedStrokesBot = () => game.aliveBots.find((bi) => game.rig.botFinish[bi] === 4);
+
+// a point `distFromPin` from the pin, biased toward refPos, avoiding water
+function pickPointFrom(refPos, distFromPin) {
+  const a0 = Math.atan2(refPos.x - hole.pin.x, refPos.z - hole.pin.z);
+  let best = null;
+  for (let i = 0; i < 14; i++) {
+    const a = a0 + (Math.random() - 0.5) * 1.6;
+    const x = hole.pin.x + Math.sin(a) * distFromPin;
+    const z = hole.pin.z + Math.cos(a) * distFromPin;
+    if (Math.abs(x) > hole.halfW - 4 || z < hole.zMin + 4 || z > hole.zMax - 4) continue;
+    const p = new THREE.Vector3(x, 0, z);
+    if (hole.surfaceAt(x, z) !== 'water' && !hole.inWaterZone(x, z)) return p;
+    if (!best) best = p;
+  }
+  return best || new THREE.Vector3(hole.pin.x, 0, hole.pin.z + distFromPin);
+}
+
+function initBotPlay() {
+  game.botPlay = new Map();
+  for (const bi of game.aliveBots) {
+    const ball = makeBallMesh();
+    ball.position.copy(botTeePos(bi));
+    scene.add(ball);
+    botBalls.push(ball);
+    game.botPlay.set(bi, { strokes: 0, holed: false, pos: botTeePos(bi), teeCarry: 0, ball });
+  }
+}
+
+function updateStrokeStatus() {
+  if (game.mode !== 'strokes' || !game.botPlay) return;
+  const rows = [];
+  for (const bi of game.aliveBots) {
+    const st = game.botPlay.get(bi);
+    rows.push({
+      color: botLook(bi).shirt,
+      done: st.holed,
+      text: st.holed ? `IN · ${st.strokes}` : `S${st.strokes}`,
+    });
+  }
+  ui.setStatusRows(rows);
+}
+
+async function botStrokeVisualHoleOut(bi, st) {
+  const from = st.ball.position.clone();
+  const d = pinDistOf(from);
+  const dur = Math.min(2.0, 0.5 + d * 0.05);
+  st.ball.visible = true;
+  await runTask((t) => {
+    const k = Math.min(1, t / dur);
+    st.ball.position.lerpVectors(from, hole.pin, k);
+    const h = hole.heightAt(st.ball.position.x, st.ball.position.z) + BALL_R;
+    st.ball.position.y = h + Math.sin(Math.PI * k) * Math.min(3, d * 0.12);
+    return k >= 1;
+  });
+  st.ball.visible = false;
+  spawnRing(hole.pin, 0xffffff, 1.5, 0.4);
+  sfx.onGreen();
+  st.holed = true;
+  st.pos = hole.pin.clone();
+  botRigs[bi].group.visible = false;
+  ui.toast(`${botLook(bi).name} in for ${st.strokes}`, 1700);
+  updateStrokeStatus();
+}
+
+async function botFullStroke(bi, opt) {
+  const st = game.botPlay.get(bi);
+  if (!st || st.holed) return;
+  await sleep(150 + Math.random() * 900);
+  st.strokes++;
+  const rem = pinDistOf(st.pos);
+  const doomed = opt.doomedStall && bi === doomedStrokesBot();
+  const holing = !doomed && (opt.forceHole || (rem < 30 && st.strokes >= 2));
+
+  if (holing && rem < 30) {
+    await botStrokeVisualHoleOut(bi, st);
+    return;
+  }
+
+  let remNext;
+  if (rem > 150) remNext = rem * (0.4 + Math.random() * 0.14);
+  else if (rem > 30) remNext = 4 + Math.random() * 5;
+  else remNext = doomed ? 6 + Math.random() * 8 : 3 + Math.random() * 3;
+  if (holing) remNext = 0.3;
+  if (st.strokes === 1 && opt.mustOutdrive != null) {
+    // tie insurance: on the player's elimination hole every bot outdrives them
+    remNext = Math.min(remNext, Math.max(6, hole.length - opt.mustOutdrive));
+  }
+  const target = pickPointFrom(st.pos, remNext);
+  const start = st.pos.clone();
+  start.y = hole.heightAt(start.x, start.z) + BALL_R;
+  const s = solveBotShot({
+    start,
+    targetPoint: target,
+    hole,
+    wind: hole.wind,
+    loftDeg: rem > 150 ? 14 : 30,
+    curveDeg: (Math.random() - 0.5) * 4,
+  });
+  const rig = botRigs[bi];
+  placeGolfer(rig, start, s.dir);
+  rig.group.visible = true;
+  const driver = scriptedSwing(rig, () => {
+    sfx.strike(0.35 + Math.random() * 0.3);
+    st.ball.visible = true;
+    st.ball.position.copy(start);
+    botShots.push({
+      flight: new BallFlight({ pos: start, dir: s.dir, v0: s.v0, loftDeg: s.loftDeg, curveDeg: s.curveDeg, wind: hole.wind, hole }),
+      ball: st.ball,
+      bi,
+    });
+  });
+  await runTask((t) => driver(t));
+  // resting spot comes from the deterministic pre-simulation
+  st.pos = s.sim.pos.clone();
+  if (st.strokes === 1) {
+    st.teeCarry = Math.hypot(st.pos.x - start.x, st.pos.z - start.z);
+  }
+  if (holing) {
+    await waitBotFlightsDone();
+    await botStrokeVisualHoleOut(bi, st);
+  } else {
+    updateStrokeStatus();
+  }
+}
+
+// Launched at the player's strike: every unfinished bot plays its next
+// stroke concurrently. Because the player's outcome is pre-simulated, the
+// stroke that will hole out is known immediately — bots that must beat
+// the player hole out on that same concurrent stroke.
+function launchBotStrokesRound(predicted, predHoled) {
+  const playerElim = game.rig.playerFinish === 4;
+  const lastStroke = predHoled || game.playerStrokes >= 6;
+  const mustOutdrive =
+    playerElim && game.playerStrokes === 0
+      ? Math.hypot(predicted.pos.x - hole.tee.x, predicted.pos.z - hole.tee.z) + 3
+      : null;
+  const jobs = [];
+  for (const bi of game.aliveBots) {
+    jobs.push(
+      botFullStroke(bi, {
+        forceHole: lastStroke,
+        doomedStall: !playerElim,
+        mustOutdrive,
+      })
+    );
+  }
+  game.botVolley = Promise.all(jobs);
+}
+
+async function finishBotStrokePlay() {
+  const playerScore = game.playerHoled ? game.playerStrokes : 8;
+  const playerElim = game.rig.playerFinish === 4;
+  const d = doomedStrokesBot();
+  if (playerElim || d == null) return;
+  const st = game.botPlay.get(d);
+  if (!st || st.holed) return;
+
+  let maxOther = playerScore;
+  for (const bi of game.aliveBots) {
+    if (bi === d) continue;
+    maxOther = Math.max(maxOther, game.botPlay.get(bi).strokes);
+  }
+  ui.showShotResult(`${botLook(d).name} is still out there…`, 2200);
+  const bp = st.pos;
+  setCam(
+    () => {
+      cam.pos.set(bp.x + 7, Math.max(hole.heightAt(bp.x + 7, bp.z + 9), bp.y) + 5, bp.z + 9);
+      cam.look.set(bp.x, bp.y, bp.z);
+    },
+    { damp: 3 }
+  );
+  await sleep(1000);
+  let guard = 0;
+  while (st.strokes <= maxOther && guard++ < 6) {
+    st.strokes++;
+    if (st.strokes > maxOther) {
+      await botStrokeVisualHoleOut(d, st);
+    } else {
+      // scrambling lay-up
+      const from = st.ball.position.clone();
+      const target = pickPointFrom(st.pos, Math.max(4, pinDistOf(st.pos) * 0.45));
+      target.y = hole.heightAt(target.x, target.z) + BALL_R;
+      st.ball.visible = true;
+      await runTask((t) => {
+        const k = Math.min(1, t / 1.2);
+        st.ball.position.lerpVectors(from, target, k);
+        st.ball.position.y = lerp(from.y, target.y, k) + Math.sin(Math.PI * k) * 6;
+        return k >= 1;
+      });
+      st.pos = target.clone();
+      sfx.bounce();
+      updateStrokeStatus();
+    }
+  }
+  await sleep(700);
+}
+
+async function strokePlayLoop() {
+  initBotPlay();
+  updateStrokeStatus();
+  ui.setStrokeInfo('STROKE 1');
+  while (!game.playerHoled) {
+    const res = await takeShot();
+    if (game.botVolley) {
+      await game.botVolley;
+      game.botVolley = null;
+    }
+    ui.showFfwd(false);
+    timeScale = 1;
+    if (res.holed) break;
+  }
+  await finishBotStrokePlay();
+  ui.setStatusRows(null);
+  ui.setStrokeInfo(null);
+}
+
+// ------------------------------------------------------------------
+//  Hole 3: time race (full hole in a golf cart, slowest is cut)
+// ------------------------------------------------------------------
+
+let raceCarts = [];
+
+function clearRaceCarts() {
+  raceCarts.forEach((c) => {
+    scene.remove(c.group);
+    disposeCart(c);
+  });
+  raceCarts = [];
+}
+
+function makeRacePlan(bi, opt) {
+  const L = hole.length;
+  const start = botTeePos(bi);
+  const p1 = pickPointFrom(start, L * (0.42 + Math.random() * 0.1));
+  const p2 = pickPointFrom(p1, 4 + Math.random() * 4);
+  p1.y = hole.heightAt(p1.x, p1.z) + BALL_R;
+  p2.y = hole.heightAt(p2.x, p2.z) + BALL_R;
+  const cartSpeed = opt.fast ? 11.5 + Math.random() * 1.5 : 8.5 + Math.random() * 2;
+  const pause = opt.fast ? 1.1 : 2.0;
+
+  const segs = [];
+  let t = 0.6 + Math.random() * 1.6;
+  const flight = (from, to, dur) => {
+    segs.push({ type: 'flight', t0: t, t1: t + dur, from, to });
+    t += dur;
+  };
+  const cartLeg = (from, to) => {
+    const dur = Math.max(1, from.distanceTo(to) / cartSpeed);
+    segs.push({ type: 'cart', t0: t, t1: t + dur, from, to });
+    t += dur;
+  };
+  flight(start.clone(), p1, 2.4);
+  t += pause;
+  cartLeg(start.clone(), p1);
+  t += pause;
+  flight(p1.clone(), p2, 2.0);
+  t += pause * 0.7;
+  cartLeg(p1.clone(), p2);
+  t += pause * 0.6;
+
+  return {
+    bi,
+    segs,
+    slow: opt.slow,
+    delta: opt.delta,
+    wanderFrom: t,
+    p2,
+    finishAt: opt.slow ? null : t + 1.6,
+    finishTime: null,
+    finished: false,
+    cart: null,
+    ball: null,
+  };
+}
+
+function buildRacePlans() {
+  const playerElim = game.rig.playerFinish === 3;
+  const doomed = game.aliveBots.find((bi) => game.rig.botFinish[bi] === 3);
+  raceState = { t: 0, running: false, playerTime: null, plans: new Map() };
+  for (const bi of game.aliveBots) {
+    const isDoomed = !playerElim && bi === doomed;
+    // slow = scripted to finish behind the player
+    const slow = isDoomed || (!playerElim && game.rig.semiWinnerIsPlayer && bi !== doomed);
+    const delta = isDoomed ? 8 + game.rng() * 6 : 3 + game.rng() * 3;
+    raceState.plans.set(bi, makeRacePlan(bi, { slow, delta, fast: playerElim }));
+  }
+}
+
+// Safety valve: fired at the player's predicted-holing strike, so every
+// bot scripted to beat the player is in the cup before their ball stops.
+function raceForceFinishFastBots() {
+  if (!raceState) return;
+  for (const plan of raceState.plans.values()) {
+    if (!plan.slow && !plan.finished) {
+      plan.finishAt = Math.min(plan.finishAt ?? Infinity, raceState.t + 1.3);
+    }
+  }
+}
+
+function updateRaceStatus() {
+  if (!raceState) return;
+  const rows = [];
+  for (const bi of game.aliveBots) {
+    const plan = raceState.plans.get(bi);
+    rows.push({
+      color: botLook(bi).shirt,
+      done: plan.finished,
+      text: plan.finished ? `IN · ${fmtTime(plan.finishTime)}` : 'on course',
+    });
+  }
+  ui.setStatusRows(rows);
+}
+
+function moveBotCart(plan, x, z) {
+  const g = plan.cart.group;
+  const dx = x - g.position.x;
+  const dz = z - g.position.z;
+  const d = Math.hypot(dx, dz);
+  if (d > 0.001) g.rotation.y = Math.atan2(dx, dz);
+  g.position.set(x, hole.heightAt(x, z), z);
+  plan.cart.update(d);
+}
+
+function advanceRacePlan(bi, plan) {
+  if (plan.finished || !plan.ball) return;
+  const t = raceState.t;
+  if (plan.finishAt != null && t >= plan.finishAt) {
+    plan.finished = true;
+    plan.finishTime = plan.finishAt;
+    plan.ball.visible = false;
+    spawnRing(hole.pin, 0xffffff, 1.5, 0.4);
+    sfx.onGreen();
+    ui.toast(`${botLook(bi).name} in — ${fmtTime(plan.finishTime)}`, 1800);
+    updateRaceStatus();
+    return;
+  }
+  for (const s of plan.segs) {
+    if (t >= s.t0 && t < s.t1) {
+      const k = (t - s.t0) / (s.t1 - s.t0);
+      if (s.type === 'flight') {
+        plan.ball.visible = true;
+        plan.ball.position.lerpVectors(s.from, s.to, k);
+        plan.ball.position.y =
+          lerp(s.from.y, s.to.y, k) +
+          Math.sin(Math.PI * k) * Math.max(6, s.from.distanceTo(s.to) * 0.08);
+      } else {
+        moveBotCart(plan, lerp(s.from.x, s.to.x, k), lerp(s.from.z, s.to.z, k));
+      }
+      return;
+    }
+  }
+  if (t >= plan.wanderFrom && plan.finishAt == null) {
+    // waiting for the script: circle the green "lining it up"
+    const a = t * 0.45 + plan.bi * 2;
+    moveBotCart(plan, plan.p2.x + Math.cos(a) * 7, plan.p2.z + Math.sin(a) * 7);
+  }
+}
+
+function seatedPose(rig) {
+  setPose(rig, 0);
+  rig.J.spineL.rotation.x = 0.08;
+  rig.J.hipL.rotation.x = -1.35;
+  rig.J.hipR.rotation.x = -1.35;
+  rig.J.kneeL.rotation.x = 1.45;
+  rig.J.kneeR.rotation.x = 1.45;
+  rig.J.armsRoot.rotation.x = -0.75;
+  rig.J.armsRoot.rotation.z = 0;
+  rig.J.club.visible = false;
+}
+
+async function cartDriveToBall() {
+  phase = 'cart';
+  ui.setControlsVisible(false);
+  ui.el.aimLeft.classList.remove('hidden');
+  ui.el.aimRight.classList.remove('hidden');
+  ui.showShotResult('drive to your ball — steer with the edges / A D', 2400);
+  if (!playerCart) {
+    playerCart = { cart: buildCart(PLAYER_LOOK.shirt), heading: 0, arrive: null };
+    scene.add(playerCart.cart.group);
+  }
+  const g = playerCart.cart.group;
+  g.position.copy(playerRig.group.position);
+  g.position.y = hole.heightAt(g.position.x, g.position.z);
+  playerCart.heading = Math.atan2(
+    playerBall.position.x - g.position.x,
+    playerBall.position.z - g.position.z
+  );
+  g.rotation.y = playerCart.heading;
+  // hop in
+  scene.remove(playerRig.group);
+  g.add(playerRig.group);
+  playerRig.group.position.set(0.24, 0.42, -0.12);
+  playerRig.group.rotation.set(0, 0, 0);
+  seatedPose(playerRig);
+  await new Promise((res) => (playerCart.arrive = res));
+  // hop out
+  g.remove(playerRig.group);
+  scene.add(playerRig.group);
+  playerRig.J.club.visible = true;
+  setPose(playerRig, 0);
+  placeGolferAtBall(playerRig, baseAimDir());
+}
+
+async function raceLoop() {
+  buildRacePlans();
+  botRigs.forEach((r) => (r.group.visible = false)); // they're in their carts
+  for (const bi of game.aliveBots) {
+    const plan = raceState.plans.get(bi);
+    plan.cart = buildCart(botLook(bi).shirt);
+    plan.cart.group.position.copy(botTeePos(bi)).add(new THREE.Vector3(1.3, 0, 2));
+    plan.cart.group.position.y = hole.heightAt(plan.cart.group.position.x, plan.cart.group.position.z);
+    scene.add(plan.cart.group);
+    raceCarts.push(plan.cart);
+    const ball = makeBallMesh();
+    ball.position.copy(botTeePos(bi));
+    scene.add(ball);
+    botBalls.push(ball);
+    plan.ball = ball;
+  }
+  await ui.showBanner('GO!', 'the clock is running — swing fast, drive faster', 1800);
+  raceState.running = true;
+  updateRaceStatus();
+
+  while (!game.playerHoled) {
+    const res = await takeShot();
+    if (res.holed) break;
+    await cartDriveToBall();
+  }
+  raceState.running = false;
+  ui.setRaceTimer(raceState.playerTime);
+
+  // resolve the scripted stragglers just behind the player's time
+  for (const plan of raceState.plans.values()) {
+    if (!plan.finished && plan.finishAt == null) {
+      plan.finishAt = plan.slow
+        ? Math.max(raceState.playerTime + plan.delta, raceState.t + 0.8 + plan.delta * 0.1)
+        : raceState.t + 1.2;
+    }
+  }
+  setCam(
+    () => {
+      const a = clockT * 0.25;
+      cam.pos.set(hole.pin.x + Math.sin(a) * 18, hole.pin.y + 11, hole.pin.z + Math.cos(a) * 18);
+      cam.look.copy(hole.pin);
+    },
+    { damp: 2 }
+  );
+  while ([...raceState.plans.values()].some((p) => !p.finished)) {
+    await sleep(250);
+  }
+  await sleep(900);
+  ui.setStatusRows(null);
+  ui.setRaceTimer(null);
+}
+
 async function botsPhase() {
   if (game.holeIdx >= 4 || !game.aliveBots.length) return;
   phase = 'bots';
@@ -1186,13 +1792,38 @@ function runTask(fn) {
 
 async function boardPhase() {
   phase = 'board';
-  const entries = [];
-  const pd = game.dists.get('P');
-  entries.push({ id: 'P', ...pd });
-  for (const bi of game.aliveBots) entries.push({ id: bi, ...game.dists.get(bi) });
-  entries.sort((a, b) => a.dist - b.dist);
+  let entries = [];
+  let title;
+  let labelOf;
+  if (game.mode === 'strokes') {
+    entries.push({ id: 'P', v: game.playerHoled ? game.playerStrokes : 8, tc: game.playerTeeCarry });
+    for (const bi of game.aliveBots) {
+      const st = game.botPlay.get(bi);
+      entries.push({ id: bi, v: st.strokes, tc: st.teeCarry });
+    }
+    // fewest strokes wins; ties go to the longer tee shot
+    entries.sort((a, b) => a.v - b.v || b.tc - a.tc);
+    title = `HOLE ${game.holeIdx + 1} — FEWEST STROKES`;
+    labelOf = (e) => `${e.v}${e.v >= 8 ? ' (pickup)' : ''}`;
+  } else if (game.mode === 'race') {
+    entries.push({ id: 'P', v: raceState.playerTime });
+    for (const bi of game.aliveBots) entries.push({ id: bi, v: raceState.plans.get(bi).finishTime });
+    entries.sort((a, b) => a.v - b.v);
+    title = `HOLE ${game.holeIdx + 1} — FASTEST TO HOLE OUT`;
+    labelOf = (e) => fmtTime(e.v);
+  } else {
+    const pd = game.dists.get('P');
+    entries.push({ id: 'P', ...pd, v: pd.dist });
+    for (const bi of game.aliveBots) {
+      const d = game.dists.get(bi);
+      entries.push({ id: bi, ...d, v: d.dist });
+    }
+    entries.sort((a, b) => a.v - b.v);
+    title = `HOLE ${game.holeIdx + 1} — CLOSEST TO PIN`;
+    labelOf = (e) => (e.ace ? 'ACE!' : `${e.wet ? ICO.wet + ' ' : ''}${fmtDist(e.dist)}`);
+  }
   const cutEntry = entries[entries.length - 1];
-  dlog('board:', entries.map((e) => `${e.id}:${e.dist.toFixed(1)}`).join(' '), '| cut:', cutEntry.id);
+  dlog('board:', entries.map((e) => `${e.id}:${Number(e.v).toFixed(1)}`).join(' '), '| cut:', cutEntry.id);
 
   // slow pan over the green while the board shows
   setCam(
@@ -1207,13 +1838,11 @@ async function boardPhase() {
   const rows = entries.map((e) => ({
     name: e.id === 'P' ? 'You' : botLook(e.id).name,
     color: e.id === 'P' ? PLAYER_LOOK.shirt : botLook(e.id).shirt,
-    dist: e.dist,
+    label: labelOf(e),
     isPlayer: e.id === 'P',
-    wet: e.wet,
-    ace: e.ace,
     cut: e === cutEntry,
   }));
-  await ui.showBoard(`HOLE ${game.holeIdx + 1} — CLOSEST TO PIN`, rows, true);
+  await ui.showBoard(title, rows, true);
   await sleep(900);
   sfx.cut();
 
@@ -1468,6 +2097,58 @@ function frame() {
   const dt = Math.min(0.05, clock.getDelta());
   clockT += dt;
 
+  // race clock + scripted bot racers
+  if (raceState) {
+    const anyUnfinished = [...raceState.plans.values()].some((p) => !p.finished);
+    if (raceState.running || anyUnfinished) raceState.t += dt;
+    if (raceState.running) {
+      ui.setRaceTimer(raceState.playerTime ?? raceState.t);
+    }
+    for (const [bi, plan] of raceState.plans) advanceRacePlan(bi, plan);
+  }
+
+  // player cart driving
+  if (phase === 'cart' && playerCart) {
+    const g = playerCart.cart.group;
+    let steer = (keys.has('KeyA') ? -1 : 0) + (keys.has('KeyD') ? 1 : 0) + aimHold;
+    if (window.__thecut.autopilot) {
+      const want = Math.atan2(playerBall.position.x - g.position.x, playerBall.position.z - g.position.z);
+      let diff = want - playerCart.heading;
+      while (diff > Math.PI) diff -= Math.PI * 2;
+      while (diff < -Math.PI) diff += Math.PI * 2;
+      steer = clamp(diff * 3, -1, 1);
+    }
+    playerCart.heading += steer * 1.9 * dt;
+    const inWater = hole.inWaterZone(g.position.x, g.position.z);
+    const speed = inWater ? 4.5 : 10;
+    const step = speed * dt;
+    g.position.x = clamp(g.position.x + Math.sin(playerCart.heading) * step, -hole.halfW + 3, hole.halfW - 3);
+    g.position.z = clamp(g.position.z + Math.cos(playerCart.heading) * step, hole.zMin + 3, hole.zMax - 3);
+    g.position.y = hole.heightAt(g.position.x, g.position.z);
+    g.rotation.y = playerCart.heading;
+    playerCart.cart.update(step);
+    if (inWater && Math.random() < dt * 6) spawnRing(g.position, 0x9fd8ff, 2, 0.5);
+    setCam(
+      () => {
+        cam.pos.set(
+          g.position.x - Math.sin(playerCart.heading) * 8,
+          g.position.y + 4,
+          g.position.z - Math.cos(playerCart.heading) * 8
+        );
+        const minY = hole.heightAt(cam.pos.x, cam.pos.z) + 1.6;
+        if (cam.pos.y < minY) cam.pos.y = minY;
+        cam.look.set(g.position.x, g.position.y + 1.2, g.position.z);
+      },
+      { damp: 5 }
+    );
+    const dBall = Math.hypot(g.position.x - playerBall.position.x, g.position.z - playerBall.position.z);
+    if (dBall < 3.6 && playerCart.arrive) {
+      const r = playerCart.arrive;
+      playerCart.arrive = null;
+      r();
+    }
+  }
+
   // aiming input
   if (phase === 'aim') {
     const dir = (keys.has('KeyA') ? -1 : 0) + (keys.has('KeyD') ? 1 : 0) + aimHold;
@@ -1589,6 +2270,7 @@ function frame() {
   // character idle/celebrate
   allRigs().forEach((r) => {
     if (!r.group.visible) return;
+    if (r === playerRig && phase === 'cart') return; // stays seated
     if (celebrating === r) celebrateUpdate(r, clockT);
     else if (dejected !== r && phase !== 'aim' && !swingTween) idleUpdate(r, clockT);
   });

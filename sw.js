@@ -1,6 +1,6 @@
 // Cache-first service worker so The Cut plays fully offline as a PWA.
 
-const VERSION = 'the-cut-v5';
+const VERSION = 'the-cut-v6';
 
 const ASSETS = [
   './',
@@ -13,6 +13,7 @@ const ASSETS = [
   './src/physics.js',
   './src/swing.js',
   './src/golfer.js',
+  './src/cart.js',
   './src/economy.js',
   './src/clubs.js',
   './src/ui.js',

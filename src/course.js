@@ -26,13 +26,18 @@ export function generateHole(seed, idx) {
   const isWheel = idx === 4;
   const archetype = isWheel ? 'island' : ARCHETYPES[Math.floor(rng() * ARCHETYPES.length)];
 
+  // hole 2 is stroke play (mostly par 4s), hole 3 is the cart race (always
+  // a par 4 long enough that it cannot be holed from the tee)
+  const par = idx === 1 ? (rng() < 0.7 && archetype !== 'island' ? 4 : 3) : idx === 2 ? 4 : 3;
+
   let L = 100 + rng() * 95;
   if (archetype === 'island') L = 130 + rng() * 50;
   if (archetype === 'carry') L = 125 + rng() * 70;
+  if (par === 4) L = idx === 2 ? 265 + rng() * 45 : 285 + rng() * 65;
 
   // ---- routing: dogleg end-offset + mid-hole S bulge ----
-  const bendB = isWheel ? (rng() - 0.5) * 10 : (rng() - 0.5) * 44;
-  const bendA = isWheel ? 0 : (rng() - 0.5) * 28;
+  const bendB = isWheel ? (rng() - 0.5) * 10 : (rng() - 0.5) * (par === 4 ? 56 : 44);
+  const bendA = isWheel ? 0 : (rng() - 0.5) * (par === 4 ? 36 : 28);
   const centerAt = (t) => {
     const ct = clamp(t, 0, 1);
     return bendB * smoothstep(0, 1, ct) + bendA * Math.sin(Math.PI * ct);
@@ -56,7 +61,7 @@ export function generateHole(seed, idx) {
   const roughAmp = archetype === 'dunes' ? 7.5 : archetype === 'canyon' ? 5 : 4.2;
 
   // ---- fairway: width breathes along the hole (pinches and bulges) ----
-  const baseFw = archetype === 'canyon' ? 9 : 11 + rng() * 3;
+  const baseFw = (archetype === 'canyon' ? 9 : 11 + rng() * 3) + (par === 4 ? 2.5 : 0);
   const fwHalfAt = (t) =>
     clamp(baseFw * (1 + 0.55 * noise2(t * 2.6 + 3.7, 0.5, ns + 91)), 5.5, baseFw * 1.7);
 
@@ -253,6 +258,7 @@ export function generateHole(seed, idx) {
     idx,
     seed,
     isWheel,
+    par,
     archetype,
     name: isWheel ? 'The Wheel' : pick(rng, HOLE_NAMES[archetype]),
     length: L,
@@ -310,7 +316,7 @@ const C = {
 function buildMeshes(hole, rng, ns, f) {
   const group = new THREE.Group();
   const len = hole.zMax - hole.zMin;
-  const cell = 2.0;
+  const cell = hole.length > 230 ? 2.6 : 2.0;
   const nx = Math.ceil(W / cell);
   const nz = Math.ceil(len / cell);
 

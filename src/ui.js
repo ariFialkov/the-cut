@@ -3,6 +3,12 @@
 import { BETS } from './economy.js';
 import { fmtDist, yd } from './clubs.js';
 
+export function fmtTime(sec) {
+  const m = Math.floor(sec / 60);
+  const s = sec - m * 60;
+  return `${m}:${s < 10 ? '0' : ''}${s.toFixed(1)}`;
+}
+
 const $ = (id) => document.getElementById(id);
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -163,9 +169,37 @@ export class UI {
     this.el.menu.classList.add('hidden');
   }
 
-  setHole(num, name, lengthM) {
+  setHole(num, name, lengthM, par = 3) {
     $('hud-hole-num').textContent = `HOLE ${num}`;
-    $('hud-hole-name').textContent = `“${name}” · ${yd(lengthM)} yd`;
+    $('hud-hole-name').textContent = `“${name}” · par ${par} · ${yd(lengthM)} yd`;
+  }
+
+  // "STROKE 2" line under the hole name (null hides)
+  setStrokeInfo(text) {
+    const el = $('hud-stroke');
+    el.classList.toggle('hidden', !text);
+    if (text) el.textContent = text;
+  }
+
+  // running race clock in seconds (null hides)
+  setRaceTimer(sec) {
+    const el = $('race-timer');
+    el.classList.toggle('hidden', sec === null);
+    if (sec !== null) el.textContent = fmtTime(sec);
+  }
+
+  // right-side status rows: [{color, text, done}] (null hides)
+  setStatusRows(rows) {
+    const el = $('race-status');
+    el.classList.toggle('hidden', !rows);
+    if (!rows) return;
+    el.innerHTML = '';
+    for (const r of rows) {
+      const d = document.createElement('div');
+      d.className = 'rs-row' + (r.done ? ' in' : '');
+      d.innerHTML = `<span class="rs-dot" style="background:${r.color}"></span>${r.text}`;
+      el.appendChild(d);
+    }
   }
 
   setPinDist(m) {
@@ -263,7 +297,7 @@ export class UI {
   }
 
   // ---------- leaderboard ----------
-  // rows: [{name, color, dist, isPlayer, wet, cut, ace}] pre-sorted
+  // rows: [{name, color, label, isPlayer, cut}] pre-sorted; label is HTML
   async showBoard(title, rows, showCutLine) {
     this.el.boardTitle.textContent = title;
     this.el.board.classList.remove('hidden');
@@ -274,8 +308,7 @@ export class UI {
       const li = document.createElement('li');
       if (r.isPlayer) li.classList.add('me');
       if (r.cut) li.classList.add('cutrow');
-      const distTxt = r.ace ? 'ACE!' : `${r.wet ? ICO.wet + ' ' : ''}${fmtDist(r.dist)}`;
-      li.innerHTML = `<span class="rank">${i + 1}</span><span class="dot" style="background:${r.color}"></span><span>${r.name}</span><span class="dist">${distTxt}</span>`;
+      li.innerHTML = `<span class="rank">${i + 1}</span><span class="dot" style="background:${r.color}"></span><span>${r.name}</span><span class="dist">${r.label}</span>`;
       list.appendChild(li);
       return li;
     });
