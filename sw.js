@@ -1,6 +1,6 @@
 // Cache-first service worker so The Cut plays fully offline as a PWA.
 
-const VERSION = 'the-cut-v7';
+const VERSION = 'the-cut-v8';
 
 const ASSETS = [
   './',

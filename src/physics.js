@@ -130,6 +130,14 @@ export class BallFlight {
       const ground = hole.heightAt(p.x, p.z);
       if (p.y <= ground + BALL_R) {
         const surf = hole.surfaceAt(p.x, p.z);
+        // the prize wheel plays like a dart board: balls stick on impact
+        if (hole.isWheel && surf === 'green') {
+          p.y = ground + BALL_R;
+          v.set(0, 0, 0);
+          this.done = true;
+          out.push({ type: 'rest', pos: p.clone(), speed: 0, surf });
+          return;
+        }
         if (surf === 'water') {
           p.y = Math.max(hole.waterLevel, ground + BALL_R);
           this.done = true;
@@ -166,6 +174,13 @@ export class BallFlight {
     } else {
       // -- rolling on the surface --
       const surf = hole.surfaceAt(p.x, p.z);
+      if (hole.isWheel && surf === 'green') {
+        // rolled onto the wheel: sticks there
+        v.set(0, 0, 0);
+        this.done = true;
+        out.push({ type: 'rest', pos: p.clone(), speed: 0, surf });
+        return;
+      }
       if (surf === 'water') {
         this.done = true;
         this.inWater = true;

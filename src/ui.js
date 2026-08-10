@@ -61,6 +61,61 @@ export class UI {
     this.bet = BETS[1];
     this._buildBetRow();
     this._buildStepper();
+    this._buildJoystick();
+  }
+
+  // virtual joystick for cart driving: x = steer, y = throttle (+1 fwd)
+  _buildJoystick() {
+    this.joy = { x: 0, y: 0, active: false };
+    const base = $('joystick');
+    const knob = $('joy-knob');
+    const R = 42;
+    const setKnob = (dx, dy) => {
+      knob.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
+    };
+    const update = (e) => {
+      const r = base.getBoundingClientRect();
+      let dx = e.clientX - (r.left + r.width / 2);
+      let dy = e.clientY - (r.top + r.height / 2);
+      const len = Math.hypot(dx, dy);
+      if (len > R) {
+        dx = (dx / len) * R;
+        dy = (dy / len) * R;
+      }
+      setKnob(dx, dy);
+      const dead = (v) => (Math.abs(v) < 0.14 ? 0 : v);
+      this.joy.x = dead(dx / R);
+      this.joy.y = dead(-dy / R);
+    };
+    base.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      this.joy.active = true;
+      try {
+        base.setPointerCapture(e.pointerId);
+      } catch {}
+      update(e);
+    });
+    base.addEventListener('pointermove', (e) => {
+      if (this.joy.active) update(e);
+    });
+    const end = () => {
+      this.joy.active = false;
+      this.joy.x = 0;
+      this.joy.y = 0;
+      setKnob(0, 0);
+    };
+    base.addEventListener('pointerup', end);
+    base.addEventListener('pointercancel', end);
+  }
+
+  showJoystick(v) {
+    $('joystick').classList.toggle('hidden', !v);
+    if (!v) {
+      this.joy.active = false;
+      this.joy.x = 0;
+      this.joy.y = 0;
+      $('joy-knob').style.transform = 'translate(-50%, -50%)';
+    }
   }
 
   _sizeTrail() {

@@ -49,11 +49,14 @@ Each hole of a game is a different contest:
    (1.1 m gimme, water costs a penalty drop). Most strokes is cut; ties go to
    the longest tee shot.
 3. **Time race** — a full par 4 against the clock, and between shots you
-   **drive a golf cart** to your ball (steer with the screen edges / A-D;
-   water slows you down). Slowest to hole out is cut. No fast-forward here —
-   time is the score.
+   **drive a golf cart** to your ball (virtual joystick on mobile, W-A-S-D on
+   desktop: throttle, steer, brake; water slows you down). Once you reach the
+   green the cart parks and the last stretch is on foot. Slowest to hole out
+   is cut. No fast-forward here — time is the score.
 4. **Head-to-head** — closest to the pin; the semifinal winner hits second.
-5. **The Wheel** — the champion's bonus shot at the prize wheel.
+5. **The Wheel** — the champion's bonus shot at the prize wheel. The wheel
+   plays like a dart board: balls stick where they land, and the wheel brakes
+   so the pre-drawn sector stops under the ball.
 
 ## The betting model (read this before auditing the "AI")
 

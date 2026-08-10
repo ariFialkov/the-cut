@@ -327,3 +327,19 @@ button { font: inherit; color: inherit; border: 0; background: none; cursor: poi
   border: 2px solid transparent; opacity: 0.8;
 }
 .style-btn.sel { border-color: var(--green); color: var(--green); opacity: 1; }
+
+/* ---------- cart joystick ---------- */
+.joystick {
+  position: absolute; left: 22px; bottom: calc(36px + var(--sab));
+  width: 128px; height: 128px; border-radius: 50%;
+  background: var(--glass); backdrop-filter: blur(4px);
+  border: 2px solid rgba(255, 255, 255, 0.18);
+  pointer-events: auto; touch-action: none; z-index: 5;
+}
+.joy-knob {
+  position: absolute; left: 50%; top: 50%;
+  width: 54px; height: 54px; border-radius: 50%;
+  background: rgba(255, 255, 255, 0.85);
+  transform: translate(-50%, -50%);
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.4);
+}

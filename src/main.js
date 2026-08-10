@@ -1425,8 +1425,19 @@ async function botStrokeVisualHoleOut(bi, st) {
   spawnRing(hole.pin, 0xffffff, 1.5, 0.4);
   sfx.onGreen();
   st.holed = true;
+  // done for the day: stand off at the fringe instead of vanishing
+  const rig = botRigs[bi];
+  const away = new THREE.Vector3().subVectors(from, hole.pin).setY(0);
+  if (away.lengthSq() < 0.01) away.set(Math.sin(bi * 2), 0, Math.cos(bi * 2));
+  away.normalize();
+  const spot = new THREE.Vector3(
+    hole.pin.x + away.x * (hole.greenR + 2.5),
+    0,
+    hole.pin.z + away.z * (hole.greenR + 2.5)
+  );
+  placeGolfer(rig, spot, away.clone().negate());
+  rig.group.visible = true;
   st.pos = hole.pin.clone();
-  botRigs[bi].group.visible = false;
   ui.toast(`${botLook(bi).name} in for ${st.strokes}`, 1700);
   updateStrokeStatus();
 }
@@ -1618,13 +1629,24 @@ function makeRacePlan(bi, opt) {
     segs.push({ type: 'cart', t0: t, t1: t + dur, from, to });
     t += dur;
   };
+  // carts park at the green edge; the last stretch is on foot
+  const toEdge = new THREE.Vector3().subVectors(p2, hole.pin);
+  toEdge.y = 0;
+  const edgeLen = Math.max(0.01, toEdge.length());
+  const pEdge = new THREE.Vector3(
+    hole.pin.x + (toEdge.x / edgeLen) * (hole.greenR + 4),
+    0,
+    hole.pin.z + (toEdge.z / edgeLen) * (hole.greenR + 4)
+  );
+  pEdge.y = hole.heightAt(pEdge.x, pEdge.z);
+
   flight(start.clone(), p1, 2.4);
   t += pause;
   cartLeg(start.clone(), p1);
   t += pause;
   flight(p1.clone(), p2, 2.0);
   t += pause * 0.7;
-  cartLeg(p1.clone(), p2);
+  cartLeg(p1.clone(), pEdge);
   t += pause * 0.6;
 
   return {
@@ -1637,9 +1659,34 @@ function makeRacePlan(bi, opt) {
     finishAt: opt.slow ? null : t + 1.6,
     finishTime: null,
     finished: false,
+    riding: false,
     cart: null,
     ball: null,
   };
+}
+
+// seat a bot in its cart / stand it at its ball
+function setBotRiding(plan, riding) {
+  if (plan.riding === riding) return;
+  plan.riding = riding;
+  const rig = botRigs[plan.bi];
+  if (riding) {
+    scene.remove(rig.group);
+    plan.cart.group.add(rig.group);
+    rig.group.position.set(0.24, 0.06, -0.18);
+    rig.group.rotation.set(0, 0, 0);
+    seatedPose(rig);
+  } else {
+    plan.cart.group.remove(rig.group);
+    scene.add(rig.group);
+    rig.seated = false;
+    rig.J.club.visible = true;
+    setPose(rig, 0);
+    const bp = plan.ball ? plan.ball.position : botTeePos(plan.bi);
+    const dir = new THREE.Vector3(hole.pin.x - bp.x, 0, hole.pin.z - bp.z).normalize();
+    placeGolfer(rig, bp, dir);
+  }
+  rig.group.visible = true;
 }
 
 function buildRacePlans() {
@@ -1696,7 +1743,17 @@ function advanceRacePlan(bi, plan) {
   if (plan.finishAt != null && t >= plan.finishAt) {
     plan.finished = true;
     plan.finishTime = plan.finishAt;
+    setBotRiding(plan, false);
     plan.ball.visible = false;
+    // walks off to the fringe after holing out
+    const rig = botRigs[bi];
+    const away = new THREE.Vector3().subVectors(plan.p2, hole.pin).setY(0).normalize();
+    const spot = new THREE.Vector3(
+      hole.pin.x + away.x * (hole.greenR + 2.5),
+      0,
+      hole.pin.z + away.z * (hole.greenR + 2.5)
+    );
+    placeGolfer(rig, spot, away.clone().negate());
     spawnRing(hole.pin, 0xffffff, 1.5, 0.4);
     sfx.onGreen();
     ui.toast(`${botLook(bi).name} in — ${fmtTime(plan.finishTime)}`, 1800);
@@ -1707,25 +1764,25 @@ function advanceRacePlan(bi, plan) {
     if (t >= s.t0 && t < s.t1) {
       const k = (t - s.t0) / (s.t1 - s.t0);
       if (s.type === 'flight') {
+        setBotRiding(plan, false);
         plan.ball.visible = true;
         plan.ball.position.lerpVectors(s.from, s.to, k);
         plan.ball.position.y =
           lerp(s.from.y, s.to.y, k) +
           Math.sin(Math.PI * k) * Math.max(6, s.from.distanceTo(s.to) * 0.08);
       } else {
+        setBotRiding(plan, true);
         moveBotCart(plan, lerp(s.from.x, s.to.x, k), lerp(s.from.z, s.to.z, k));
       }
       return;
     }
   }
-  if (t >= plan.wanderFrom && plan.finishAt == null) {
-    // waiting for the script: circle the green "lining it up"
-    const a = t * 0.45 + plan.bi * 2;
-    moveBotCart(plan, plan.p2.x + Math.cos(a) * 7, plan.p2.z + Math.sin(a) * 7);
-  }
+  // between segments (or waiting for the script): standing at the ball
+  setBotRiding(plan, false);
 }
 
 function seatedPose(rig) {
+  rig.seated = true;
   setPose(rig, 0);
   rig.J.spineL.rotation.x = 0.08;
   rig.J.hipL.rotation.x = -1.35;
@@ -1740,13 +1797,13 @@ function seatedPose(rig) {
 async function cartDriveToBall() {
   phase = 'cart';
   ui.setControlsVisible(false);
-  ui.el.aimLeft.classList.remove('hidden');
-  ui.el.aimRight.classList.remove('hidden');
-  ui.showShotResult('drive to your ball — steer with the edges / A D', 2400);
+  ui.showJoystick(true);
+  ui.showShotResult('drive to your ball — joystick or W A S D', 2400);
   if (!playerCart) {
-    playerCart = { cart: buildCart(PLAYER_LOOK.shirt), heading: 0, arrive: null };
+    playerCart = { cart: buildCart(PLAYER_LOOK.shirt), heading: 0, speed: 0, arrive: null };
     scene.add(playerCart.cart.group);
   }
+  playerCart.speed = 0;
   const g = playerCart.cart.group;
   g.position.copy(playerRig.group.position);
   g.position.y = hole.heightAt(g.position.x, g.position.z);
@@ -1762,17 +1819,33 @@ async function cartDriveToBall() {
   playerRig.group.rotation.set(0, 0, 0);
   seatedPose(playerRig);
   await new Promise((res) => (playerCart.arrive = res));
+  ui.showJoystick(false);
   // hop out
   g.remove(playerRig.group);
   scene.add(playerRig.group);
+  playerRig.seated = false;
   playerRig.J.club.visible = true;
   setPose(playerRig, 0);
   placeGolferAtBall(playerRig, baseAimDir());
+
+  // arrived greenside? park it — from here on it's on foot
+  if (pinDistOf(playerBall.position) < hole.greenR + 10) {
+    raceState.playerParked = true;
+    // nudge the cart off the putting surface
+    const c = g.position;
+    const dPin = Math.hypot(c.x - hole.pin.x, c.z - hole.pin.z);
+    if (dPin < hole.greenR + 2) {
+      const k = (hole.greenR + 3.5) / Math.max(0.01, dPin);
+      c.x = hole.pin.x + (c.x - hole.pin.x) * k;
+      c.z = hole.pin.z + (c.z - hole.pin.z) * k;
+      c.y = hole.heightAt(c.x, c.z);
+    }
+    ui.toast('Cart parked — walking it in');
+  }
 }
 
 async function raceLoop() {
   buildRacePlans();
-  botRigs.forEach((r) => (r.group.visible = false)); // they're in their carts
   for (const bi of game.aliveBots) {
     const plan = raceState.plans.get(bi);
     plan.cart = buildCart(botLook(bi).shirt);
@@ -1794,7 +1867,14 @@ async function raceLoop() {
   while (!game.playerHoled) {
     const res = await takeShot();
     if (res.holed) break;
-    await cartDriveToBall();
+    if (raceState.playerParked) {
+      // cart's parked greenside: just walk to the ball
+      placeGolferAtBall(playerRig, baseAimDir());
+      spawnRing(playerBall.position, 0xffffff, 1.2, 0.35);
+      await sleep(450);
+    } else {
+      await cartDriveToBall();
+    }
   }
   raceState.running = false;
   ui.setRaceTimer(raceState.playerTime);
@@ -2173,18 +2253,32 @@ function frame() {
   // player cart driving
   if (phase === 'cart' && playerCart && playerCart.arrive) {
     const g = playerCart.cart.group;
-    let steer = (keys.has('KeyA') ? -1 : 0) + (keys.has('KeyD') ? 1 : 0) + aimHold;
+    let steer = (keys.has('KeyA') ? -1 : 0) + (keys.has('KeyD') ? 1 : 0) + ui.joy.x + aimHold;
+    let throttle = (keys.has('KeyW') ? 1 : 0) - (keys.has('KeyS') ? 1 : 0) + ui.joy.y;
     if (window.__thecut.autopilot) {
       const want = Math.atan2(playerBall.position.x - g.position.x, playerBall.position.z - g.position.z);
       let diff = want - playerCart.heading;
       while (diff > Math.PI) diff -= Math.PI * 2;
       while (diff < -Math.PI) diff += Math.PI * 2;
       steer = clamp(diff * 3, -1, 1);
+      throttle = 1;
     }
-    playerCart.heading += steer * 1.9 * dt;
+    steer = clamp(steer, -1, 1);
+    throttle = clamp(throttle, -1, 1);
+    // throttle & brake: W / joystick-up drives, S / joystick-down brakes,
+    // no input coasts down
     const inWater = hole.inWaterZone(g.position.x, g.position.z);
-    const speed = inWater ? 4.5 : 10;
-    const step = speed * dt;
+    const maxS = inWater ? 4.5 : 12;
+    const target = Math.max(0, throttle) * maxS;
+    const rate = throttle < 0 ? 18 : target > playerCart.speed ? 8 : 4;
+    playerCart.speed = clamp(
+      playerCart.speed + clamp(target - playerCart.speed, -rate * dt, rate * dt),
+      0,
+      maxS
+    );
+    // carts don't spin in place
+    playerCart.heading += steer * 1.9 * dt * clamp(playerCart.speed / 4, 0.25, 1);
+    const step = playerCart.speed * dt;
     g.position.x = clamp(g.position.x + Math.sin(playerCart.heading) * step, -hole.halfW + 1, hole.halfW - 1);
     g.position.z = clamp(g.position.z + Math.cos(playerCart.heading) * step, hole.zMin + 1, hole.zMax - 1);
     g.position.y = hole.heightAt(g.position.x, g.position.z);
@@ -2211,7 +2305,8 @@ function frame() {
     if (dBall < (playerCart.best ?? Infinity) - 0.5) {
       playerCart.best = dBall;
       playerCart.stuckT = 0;
-    } else {
+    } else if (playerCart.speed > 2.5) {
+      // only "stuck" while actually driving — idling is the player's choice
       playerCart.stuckT = (playerCart.stuckT || 0) + dt;
     }
     if (playerCart.debugT === undefined || playerCart.driveT - playerCart.debugT > 3) {
@@ -2224,7 +2319,7 @@ function frame() {
         'stuck=' + (playerCart.stuckT || 0).toFixed(1)
       );
     }
-    const stuck = playerCart.stuckT > 8 || playerCart.driveT > 60;
+    const stuck = playerCart.stuckT > 8 || playerCart.driveT > 150;
     if (stuck && dBall >= 4.2) {
       ui.toast('Marshal shuttle — dropped at your ball');
       g.position.set(
@@ -2364,8 +2459,7 @@ function frame() {
 
   // character idle/celebrate
   allRigs().forEach((r) => {
-    if (!r.group.visible) return;
-    if (r === playerRig && phase === 'cart') return; // stays seated
+    if (!r.group.visible || r.seated) return;
     if (celebrating === r) celebrateUpdate(r, clockT);
     else if (dejected !== r && phase !== 'aim' && !swingTween) idleUpdate(r, clockT);
   });
