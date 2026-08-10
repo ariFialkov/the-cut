@@ -2109,7 +2109,7 @@ function frame() {
   }
 
   // player cart driving
-  if (phase === 'cart' && playerCart) {
+  if (phase === 'cart' && playerCart && playerCart.arrive) {
     const g = playerCart.cart.group;
     let steer = (keys.has('KeyA') ? -1 : 0) + (keys.has('KeyD') ? 1 : 0) + aimHold;
     if (window.__thecut.autopilot) {
@@ -2123,8 +2123,8 @@ function frame() {
     const inWater = hole.inWaterZone(g.position.x, g.position.z);
     const speed = inWater ? 4.5 : 10;
     const step = speed * dt;
-    g.position.x = clamp(g.position.x + Math.sin(playerCart.heading) * step, -hole.halfW + 3, hole.halfW - 3);
-    g.position.z = clamp(g.position.z + Math.cos(playerCart.heading) * step, hole.zMin + 3, hole.zMax - 3);
+    g.position.x = clamp(g.position.x + Math.sin(playerCart.heading) * step, -hole.halfW + 1, hole.halfW - 1);
+    g.position.z = clamp(g.position.z + Math.cos(playerCart.heading) * step, hole.zMin + 1, hole.zMax - 1);
     g.position.y = hole.heightAt(g.position.x, g.position.z);
     g.rotation.y = playerCart.heading;
     playerCart.cart.update(step);
@@ -2143,7 +2143,39 @@ function frame() {
       { damp: 5 }
     );
     const dBall = Math.hypot(g.position.x - playerBall.position.x, g.position.z - playerBall.position.z);
-    if (dBall < 3.6 && playerCart.arrive) {
+    // telemetry + stuck failsafe: if the drive makes no progress (ball in
+    // an unreachable pocket), the marshal shuttles the cart over
+    playerCart.driveT = (playerCart.driveT || 0) + dt;
+    if (dBall < (playerCart.best ?? Infinity) - 0.5) {
+      playerCart.best = dBall;
+      playerCart.stuckT = 0;
+    } else {
+      playerCart.stuckT = (playerCart.stuckT || 0) + dt;
+    }
+    if (playerCart.debugT === undefined || playerCart.driveT - playerCart.debugT > 3) {
+      playerCart.debugT = playerCart.driveT;
+      dlog(
+        'cart:',
+        `pos(${g.position.x.toFixed(0)},${g.position.z.toFixed(0)})`,
+        `ball(${playerBall.position.x.toFixed(0)},${playerBall.position.z.toFixed(0)})`,
+        'd=' + dBall.toFixed(1),
+        'stuck=' + (playerCart.stuckT || 0).toFixed(1)
+      );
+    }
+    const stuck = playerCart.stuckT > 8 || playerCart.driveT > 60;
+    if (stuck && dBall >= 4.2) {
+      ui.toast('Marshal shuttle — dropped at your ball');
+      g.position.set(
+        playerBall.position.x + 2,
+        hole.heightAt(playerBall.position.x + 2, playerBall.position.z),
+        playerBall.position.z
+      );
+    }
+    if (dBall < 4.2 || stuck) {
+      playerCart.driveT = 0;
+      playerCart.stuckT = 0;
+      playerCart.best = Infinity;
+      playerCart.debugT = undefined;
       const r = playerCart.arrive;
       playerCart.arrive = null;
       r();
