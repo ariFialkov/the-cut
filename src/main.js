@@ -6,8 +6,10 @@ import { BallFlight, BALL_R, clubLaunchSpeed, simulateToRest, solveBotShot } fro
 import { CLUBS, recommendClubIndex, fmtDist, yd } from './clubs.js';
 import { SwingController, shotFromMetrics } from './swing.js';
 import {
-  ROSTER,
+  PLAYER_LOOK,
+  BOT_BANK,
   buildGolfer,
+  disposeGolfer,
   setPose,
   scriptedSwing,
   celebrateUpdate,
@@ -15,9 +17,9 @@ import {
   idleUpdate,
 } from './golfer.js';
 import { MULTS, BETS, WHEEL, loadBalance, saveBalance, makeRig, botDistances, finalStandings } from './economy.js';
-import { UI, sleep } from './ui.js';
+import { UI, sleep, ICO } from './ui.js';
 import { sfx } from './sfx.js';
-import { mulberry32, clamp, lerp } from './rng.js';
+import { mulberry32, clamp, lerp, shuffle } from './rng.js';
 
 // ------------------------------------------------------------------
 //  Renderer / scene
@@ -205,13 +207,18 @@ const ui = new UI();
 let balance = loadBalance();
 ui.setBalance(balance);
 
-const rigs = ROSTER.map((look) => {
-  const r = buildGolfer(look);
-  r.group.visible = false;
-  scene.add(r.group);
-  return r;
-});
-const playerRig = rigs[0];
+const playerRig = buildGolfer(PLAYER_LOOK);
+playerRig.group.visible = false;
+scene.add(playerRig.group);
+let botRigs = []; // rebuilt each game from the 4 drawn bank looks
+
+function botLook(bi) {
+  return game.botLooks[bi];
+}
+
+function allRigs() {
+  return [playerRig, ...botRigs];
+}
 
 let hole = null; // current hole
 let holePreview = null; // hole 1, generated at menu time
@@ -435,7 +442,7 @@ function buildGates() {
   order.forEach((id, i) => {
     const x = (i - (n - 1) / 2) * spacing;
     game.gates.set(id, x);
-    const look = id === 'P' ? ROSTER[0] : ROSTER[id + 1];
+    const look = id === 'P' ? PLAYER_LOOK : botLook(id);
     for (const s of [-0.55, 0.55]) {
       const m = new THREE.Mesh(
         new THREE.SphereGeometry(0.13, 8, 6),
@@ -454,7 +461,7 @@ function botTeePos(bi) {
 }
 
 function golferToGate(bi) {
-  const rig = rigs[bi + 1];
+  const rig = botRigs[bi];
   const p = botTeePos(bi);
   const dir = new THREE.Vector3(hole.pin.x - p.x, 0, hole.pin.z - p.z).normalize();
   placeGolfer(rig, p, dir);
@@ -535,7 +542,7 @@ function menuState() {
   ui.setBalance(balance);
   ui.showFfwd(false);
   timeScale = 1;
-  rigs.forEach((r) => (r.group.visible = false));
+  allRigs().forEach((r) => (r.group.visible = false));
   playerBall.visible = false;
   shadowBlob.visible = false;
   botBalls.forEach((b) => scene.remove(b));
@@ -601,17 +608,36 @@ async function startGame(bet) {
   if (ff >= 1 && ff <= 5) {
     while (rig.playerFinish !== ff) rig = makeRig(grng);
   }
+  const fsw = window.__thecut && window.__thecut.forceSemiWinner;
+  if (fsw === 'P') rig.semiWinnerIsPlayer = rig.playerFinish === 2;
+  else if (fsw === 'B') rig.semiWinnerIsPlayer = false;
+
+  // draw this game's field from the bank and build their rigs
+  const botLooks = shuffle(grng, BOT_BANK).slice(0, 4);
+  botRigs.forEach((r) => {
+    scene.remove(r.group);
+    disposeGolfer(r);
+  });
+  botRigs = botLooks.map((look) => {
+    const r = buildGolfer(look);
+    r.group.visible = false;
+    scene.add(r.group);
+    return r;
+  });
+
   game = {
     bet,
     rng: grng,
     rig,
+    botLooks,
     aliveBots: [0, 1, 2, 3],
     playerAlive: true,
     holeIdx: 0,
+    openerDone: false,
     dists: new Map(),
   };
   phase = 'lobby';
-  await ui.runLobby(ROSTER, 0);
+  await ui.runLobby([PLAYER_LOOK, ...game.botLooks], 0);
   ui.showHud();
 
   dlog('rig', JSON.stringify(game.rig));
@@ -621,6 +647,11 @@ async function startGame(bet) {
     dlog('hole', i + 1, 'start');
     await loadHole(i);
     await flyover(i);
+    // finals: the semifinal winner has earned the second slot. If that's
+    // the player, the bot opens the head-to-head.
+    if (i === 3 && game.rig.semiWinnerIsPlayer) {
+      await finalsBotOpener();
+    }
     await takeShot();
     await botsPhase();
     await boardPhase();
@@ -661,12 +692,12 @@ async function loadHole(i) {
   game.dists = new Map();
   game.pendingOutcome = null;
   game.botVolley = null;
+  game.openerDone = false;
 
   // golfers into their gates, player ball on their tee
   playerRig.group.visible = true;
-  rigs.forEach((r, idx) => {
-    if (idx === 0) return;
-    r.group.visible = game && game.aliveBots.includes(idx - 1);
+  botRigs.forEach((r, bi) => {
+    r.group.visible = game.aliveBots.includes(bi);
   });
   buildGates();
   const px = game.gates.get('P');
@@ -854,7 +885,7 @@ async function afterLanding(result) {
   const surf = wet ? 'water' : hole.surfaceAt(result.pos.x, result.pos.z);
   if (!wet && (surf === 'green' || surf === 'fringe')) sfx.onGreen();
   ui.showShotResult(
-    ace ? 'ACE!! 🏆' : wet ? `💦 splash — ${fmtDist(dist)} w/ penalty` : `${fmtDist(dist)} from the pin`
+    ace ? 'ACE!!' : wet ? `${ICO.wet} splash — ${fmtDist(dist)} w/ penalty` : `${fmtDist(dist)} from the pin`
   );
 
   // linger on the landing spot
@@ -916,23 +947,33 @@ function solveBotConstrained(start, targetDist, c) {
     const wet = s.sim.inWater;
     const dist = wet ? targetDist : pinDistOf(s.sim.pos);
     res = { start, dir: s.dir, v0: s.v0, loftDeg: s.loftDeg, curveDeg: s.curveDeg, official: { dist, wet } };
+    const both = c.lessThan !== undefined && c.greaterThan !== undefined;
     if (c.lessThan !== undefined && dist >= c.lessThan) {
-      t = Math.max(0.35, Math.min(t * 0.7, c.lessThan - 1.2));
+      t = both ? (c.greaterThan + c.lessThan) / 2 : Math.max(0.35, Math.min(t * 0.7, c.lessThan - 1.2));
       continue;
     }
     if (c.greaterThan !== undefined && dist <= c.greaterThan) {
-      t = c.greaterThan + 2.5 + attempt * 2.5;
+      t = both ? (c.greaterThan + c.lessThan) / 2 : c.greaterThan + 2.5 + attempt * 2.5;
       continue;
     }
     break;
   }
-  if (c.lessThan !== undefined) res.official.dist = Math.min(res.official.dist, Math.max(0.15, c.lessThan - 0.05));
-  if (c.greaterThan !== undefined) res.official.dist = Math.max(res.official.dist, c.greaterThan + 0.05);
+  if (c.lessThan !== undefined && c.greaterThan !== undefined) {
+    res.official.dist = clamp(
+      res.official.dist,
+      c.greaterThan + 0.05,
+      Math.max(c.greaterThan + 0.1, c.lessThan - 0.05)
+    );
+  } else if (c.lessThan !== undefined) {
+    res.official.dist = Math.min(res.official.dist, Math.max(0.15, c.lessThan - 0.05));
+  } else if (c.greaterThan !== undefined) {
+    res.official.dist = Math.max(res.official.dist, c.greaterThan + 0.05);
+  }
   return res;
 }
 
 async function botSwingAndLaunch(bi, solved, delay) {
-  const rig = rigs[bi + 1];
+  const rig = botRigs[bi];
   const ball = makeBallMesh();
   ball.position.copy(solved.start);
   scene.add(ball);
@@ -964,9 +1005,18 @@ function scheduleBotVolley(playerDist) {
     }
   } else {
     let survivorMax = 0;
+    // the semifinal decides finals honors: the drawn semifinal winner must
+    // actually finish closer, so pin the surviving bot to the right side
+    const semiFinal = game.holeIdx === 2 && game.rig.playerFinish <= 2;
     for (const bi of game.aliveBots) {
       if (bi === outBot) continue;
-      const solved = solveBotConstrained(botTeePos(bi), script.get(bi), { lessThan: script.get(outBot) - 0.8 });
+      let c = { lessThan: script.get(outBot) - 0.8 };
+      if (semiFinal) {
+        c = game.rig.semiWinnerIsPlayer
+          ? { greaterThan: playerDist + 0.3, lessThan: script.get(outBot) - 0.8 }
+          : { lessThan: Math.min(playerDist - 0.3, script.get(outBot) - 0.8) };
+      }
+      const solved = solveBotConstrained(botTeePos(bi), script.get(bi), c);
       game.dists.set(bi, solved.official);
       survivorMax = Math.max(survivorMax, solved.official.dist);
       jobs.push(botSwingAndLaunch(bi, solved, 0.15 + Math.random() * 0.85));
@@ -992,11 +1042,66 @@ function waitBotFlightsDone() {
   });
 }
 
+// Finals opener when the PLAYER won the semifinal and hits second: the
+// bot strikes first — and sticks it dead, inside the lip-out floor, so
+// the scripted result can never be beaten by the answering shot.
+async function finalsBotOpener() {
+  phase = 'bots';
+  const bi = game.aliveBots[0];
+  const rig = botRigs[bi];
+  const start = botTeePos(bi);
+  const target = 0.28 + game.rng() * 0.2; // always under the 0.6m lip-out floor
+  const solved = solveBotConstrained(start, target, { lessThan: 0.52 });
+  game.dists.set(bi, solved.official);
+  dlog('finals opener:', botLook(bi).name, solved.official.dist.toFixed(2) + 'm');
+
+  const ball = makeBallMesh();
+  ball.position.copy(start);
+  scene.add(ball);
+  botBalls.push(ball);
+  placeGolfer(rig, start, solved.dir);
+
+  setCam(
+    () => {
+      cam.pos.set(start.x - solved.dir.x * 7.5, start.y + 3.2, start.z - solved.dir.z * 7.5);
+      const minY = hole.heightAt(cam.pos.x, cam.pos.z) + 1.4;
+      if (cam.pos.y < minY) cam.pos.y = minY;
+      cam.look.set(start.x + solved.dir.x * 25, start.y + 1, start.z + solved.dir.z * 25);
+    },
+    { damp: 6 }
+  );
+  ui.showShotResult(`${botLook(bi).name} has honors — you answer last`, 2200);
+  await sleep(1200);
+
+  const driver = scriptedSwing(rig, () => {
+    sfx.strike(0.9);
+    shakeCam(0.12);
+    botShots.push({ flight: new BallFlight({ ...solved, pos: start, wind: hole.wind, hole }), ball, bi });
+    setCam(
+      () => {
+        const p = ball.position;
+        const d = new THREE.Vector3(solved.dir.x, 0, solved.dir.z);
+        cam.pos.set(p.x - d.x * 11, p.y + 4.5, p.z - d.z * 11);
+        const minY = hole.heightAt(cam.pos.x, cam.pos.z) + 1.2;
+        if (cam.pos.y < minY) cam.pos.y = minY;
+        cam.look.copy(p);
+      },
+      { damp: 3.2 }
+    );
+  });
+  await runTask((t) => driver(t));
+  await waitBotFlightsDone();
+  sfx.cheer();
+  ui.showShotResult(`${botLook(bi).name} — ${fmtDist(solved.official.dist)}!! Beat that.`, 2600);
+  await sleep(1800);
+  game.openerDone = true;
+}
+
 // Head-to-head finale: the player has already hit; the last bot answers
 // alone with the camera on them.
 async function finalDuelBotShot() {
   const bi = game.aliveBots[0];
-  const rig = rigs[bi + 1];
+  const rig = botRigs[bi];
   const playerDist = game.dists.get('P').dist;
   const script = botDistances(game.rig, game.holeIdx, playerDist, game.aliveBots, game.rng);
   const playerOut = game.rig.playerFinish === 5 - game.holeIdx;
@@ -1020,7 +1125,7 @@ async function finalDuelBotShot() {
     },
     { damp: 6 }
   );
-  ui.showShotResult(`${ROSTER[bi + 1].name} needs to beat ${fmtDist(playerDist)}`, 2200);
+  ui.showShotResult(`${botLook(bi).name} needs to beat ${fmtDist(playerDist)}`, 2200);
   await sleep(1100);
 
   const driver = scriptedSwing(rig, () => {
@@ -1043,7 +1148,7 @@ async function finalDuelBotShot() {
   await runTask((t) => driver(t));
   await waitBotFlightsDone();
   ui.showShotResult(
-    `${ROSTER[bi + 1].name} — ${solved.official.wet ? '💦 ' : ''}${fmtDist(solved.official.dist)}`,
+    `${botLook(bi).name} — ${solved.official.wet ? ICO.wet + ' ' : ''}${fmtDist(solved.official.dist)}`,
     1600
   );
   await sleep(1400);
@@ -1052,6 +1157,12 @@ async function finalDuelBotShot() {
 async function botsPhase() {
   if (game.holeIdx >= 4 || !game.aliveBots.length) return;
   phase = 'bots';
+  if (game.openerDone) {
+    // finals bot already hit before the player; nothing left to play out
+    ui.showFfwd(false);
+    timeScale = 1;
+    return;
+  }
   if (game.aliveBots.length === 1) {
     await finalDuelBotShot();
   } else {
@@ -1094,8 +1205,8 @@ async function boardPhase() {
   );
 
   const rows = entries.map((e) => ({
-    name: e.id === 'P' ? 'You' : ROSTER[e.id + 1].name,
-    color: e.id === 'P' ? ROSTER[0].shirt : ROSTER[e.id + 1].shirt,
+    name: e.id === 'P' ? 'You' : botLook(e.id).name,
+    color: e.id === 'P' ? PLAYER_LOOK.shirt : botLook(e.id).shirt,
     dist: e.dist,
     isPlayer: e.id === 'P',
     wet: e.wet,
@@ -1116,10 +1227,10 @@ async function boardPhase() {
     await ui.showBanner('CUT', 'the field played closer — you’re out', 2200);
   } else {
     game.aliveBots = game.aliveBots.filter((b) => b !== cutEntry.id);
-    rigs[cutEntry.id + 1].group.visible = false;
+    botRigs[cutEntry.id].group.visible = false;
     await sleep(1000);
     ui.hideBoard();
-    const name = ROSTER[cutEntry.id + 1].name;
+    const name = botLook(cutEntry.id).name;
     await ui.showBanner('SAFE', `${name} misses the cut`, 1900);
   }
 }
@@ -1321,8 +1432,8 @@ async function showResults() {
   const standings = finalStandings(game.rig).map((s) => ({
     pos: s.pos,
     isPlayer: s.id === 'P',
-    name: s.id === 'P' ? 'You' : ROSTER[s.id + 1].name,
-    color: s.id === 'P' ? ROSTER[0].shirt : ROSTER[s.id + 1].shirt,
+    name: s.id === 'P' ? 'You' : botLook(s.id).name,
+    color: s.id === 'P' ? PLAYER_LOOK.shirt : botLook(s.id).shirt,
     // a winning bot's shown prize uses the wheel's expected value (x1.5)
     prize: s.id === 'P' ? payout : game.bet * MULTS[s.pos - 1] * (s.pos === 1 ? 1.5 : 1),
   }));
@@ -1476,7 +1587,7 @@ function frame() {
   }
 
   // character idle/celebrate
-  rigs.forEach((r) => {
+  allRigs().forEach((r) => {
     if (!r.group.visible) return;
     if (celebrating === r) celebrateUpdate(r, clockT);
     else if (dejected !== r && phase !== 'aim' && !swingTween) idleUpdate(r, clockT);

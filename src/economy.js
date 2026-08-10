@@ -44,9 +44,17 @@ export function saveBalance(b) {
 export function makeRig(rng) {
   const playerFinish = 1 + Math.floor(rng() * 5);
   const rest = [1, 2, 3, 4, 5].filter((p) => p !== playerFinish);
+  // Finals hitting order follows the semifinal: whoever wins hole 3 hits
+  // second in the head-to-head. The player may only win the semifinal when
+  // they are scripted to LOSE the final — then the bot opens with a dead-
+  // stiff shot the player provably cannot beat (the lip-out floor). When
+  // the player is scripted to WIN the final, the bot must hit last so it
+  // can react, which means the bot must take the semifinal.
+  const semiWinnerIsPlayer = playerFinish === 2 ? rng() < 0.5 : false;
   return {
     playerFinish,
     botFinish: shuffle(rng, rest),
+    semiWinnerIsPlayer,
     wheelIdx: Math.floor(rng() * WHEEL.length) % WHEEL.length,
   };
 }

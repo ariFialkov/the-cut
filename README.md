@@ -56,7 +56,14 @@ deterministic while the *show* is real:
   `0.2 × (2.0×1.5 + 1.4 + 0.4) = 0.96` — a **96% RTP**, independent of skill,
   with no leakage from the wheel. Prizes scale linearly with the bet.
 - Each bot is also assigned a finishing position, which fixes exactly who gets
-  cut on every hole.
+  cut on every hole. The four opponents are drawn per game from a bank of ten
+  parody pros (articulated low-poly rigs with distinct outfits).
+- The head-to-head final honors the semifinal: whoever wins hole 3 hits
+  **second** in the final. The player may only be dealt the semifinal win when
+  they are scripted to lose the final — the bot then opens with a sub-2-foot
+  dart that the player's lip-out floor provably cannot beat. When the player is
+  scripted to win the final, the bot takes the semifinal so it hits last and
+  can react to the player's real shot.
 - The player's shot is fully physically simulated — your swing quality decides
   where your ball actually lands. Because the integrator is deterministic, the
   outcome is pre-simulated at the instant of contact, so all five golfers tee

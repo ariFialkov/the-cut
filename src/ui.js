@@ -7,6 +7,13 @@ const $ = (id) => document.getElementById(id);
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Inline SVG icons (fill: currentColor) — no emoji anywhere in the UI.
+export const ICO = {
+  flag: '<svg class="ico" viewBox="0 0 24 24"><path d="M6 2h2v20H6zM8 3.5l11 3.2L8 10z"/></svg>',
+  wet: '<svg class="ico" viewBox="0 0 24 24"><path d="M12 2s-6 7.4-6 12a6 6 0 0 0 12 0c0-4.6-6-12-6-12z"/></svg>',
+  coin: '<span class="coin"></span>',
+};
+
 export class UI {
   constructor() {
     this.el = {
@@ -133,11 +140,11 @@ export class UI {
   // ---------- HUD ----------
   _buildStepper() {
     this.el.stepper.innerHTML = '';
-    const labels = ['1', '2', '3', '4', '⛳'];
+    const labels = ['1', '2', '3', '4', ICO.flag];
     for (let i = 0; i < 5; i++) {
       const d = document.createElement('div');
       d.className = 'step';
-      d.textContent = labels[i];
+      d.innerHTML = labels[i];
       this.el.stepper.appendChild(d);
     }
   }
@@ -165,10 +172,11 @@ export class UI {
     $('hud-pin').textContent = yd(m);
   }
 
-  // relDeg: wind direction relative to camera forward, degrees
+  // relDeg: wind direction relative to camera forward, degrees.
+  // The arrow glyph points up (away from camera) at 0.
   setWind(mph, relDeg) {
     $('hud-wind').textContent = Math.round(mph);
-    $('wind-arrow').style.transform = `rotate(${relDeg - 90}deg)`;
+    $('wind-arrow').style.transform = `rotate(${relDeg}deg)`;
     $('pill-wind').style.opacity = mph < 1 ? 0.45 : 1;
   }
 
@@ -204,9 +212,9 @@ export class UI {
     this._fbT = setTimeout(() => f.classList.add('hidden'), ms);
   }
 
-  showShotResult(text, ms = 2400) {
+  showShotResult(html, ms = 2400) {
     const s = this.el.shotResult;
-    s.textContent = text;
+    s.innerHTML = html;
     s.classList.remove('hidden');
     clearTimeout(this._srT);
     this._srT = setTimeout(() => s.classList.add('hidden'), ms);
@@ -266,7 +274,7 @@ export class UI {
       const li = document.createElement('li');
       if (r.isPlayer) li.classList.add('me');
       if (r.cut) li.classList.add('cutrow');
-      const distTxt = r.ace ? 'ACE! 🏆' : `${r.wet ? '💦 ' : ''}${fmtDist(r.dist)}`;
+      const distTxt = r.ace ? 'ACE!' : `${r.wet ? ICO.wet + ' ' : ''}${fmtDist(r.dist)}`;
       li.innerHTML = `<span class="rank">${i + 1}</span><span class="dot" style="background:${r.color}"></span><span>${r.name}</span><span class="dist">${distTxt}</span>`;
       list.appendChild(li);
       return li;
@@ -292,12 +300,13 @@ export class UI {
     const ordinal = ['1st', '2nd', '3rd', '4th', '5th'][pos - 1];
     $('results-title').textContent = pos === 1 ? 'CHAMPION' : pos <= 3 ? 'IN THE MONEY' : 'CUT';
     const posEl = $('results-pos');
-    posEl.textContent = pos === 1 ? '🏆 1st' : ordinal;
+    posEl.textContent = ordinal;
     posEl.className = 'results-pos ' + (pos === 1 ? 'win' : pos > 3 ? 'lose' : '');
     const wheelEl = $('results-wheel');
     wheelEl.classList.toggle('hidden', !wheel);
     if (wheel) wheelEl.textContent = `WHEEL BONUS ×${wheel}`;
-    $('results-payout').textContent = payout > 0 ? `+${payout.toFixed(0)} 🪙 (bet ${bet})` : `bet ${bet} lost`;
+    $('results-payout').innerHTML =
+      payout > 0 ? `+${payout.toFixed(0)} ${ICO.coin} (bet ${bet})` : `bet ${bet} lost`;
     const ul = $('results-standings');
     ul.innerHTML = '';
     standings.forEach((s) => {
