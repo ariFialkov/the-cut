@@ -15,14 +15,32 @@ export const CLUBS = [
   { id: 'GW', name: 'Gap Wedge', carry: 98, loft: 51 },
   { id: 'SW', name: 'Sand Wedge', carry: 82, loft: 56 },
   { id: 'LW', name: 'Lob Wedge', carry: 64, loft: 60 },
+  { id: 'PT', name: 'Putter', carry: 0, loft: 1 },
 ];
 
+export const PUTTER_IDX = CLUBS.length - 1;
+
+export function isWedge(club) {
+  return club.loft >= 45 && club.id !== 'PT';
+}
+
+// Wedge shot styles: trade carry for trajectory around the greens.
+// carryMul is where the ball LANDS relative to a stock swing — a bump
+// lands shorter but runs out well past it.
+export const STYLES = {
+  chip: { key: 'chip', label: 'CHIP', loftMul: 1, v0Mul: 1, carryMul: 1 },
+  flop: { key: 'flop', label: 'FLOP', loftMul: 1.45, v0Mul: 0.74, carryMul: 0.55 },
+  bump: { key: 'bump', label: 'BUMP', loftMul: 0.5, v0Mul: 1.02, carryMul: 0.85 },
+};
+export const STYLE_ORDER = ['chip', 'flop', 'bump'];
+
 // The "caddie" pick: effective distance folds in elevation change and the
-// along-the-line wind component (computed by the caller).
+// along-the-line wind component (computed by the caller). Never recommends
+// the putter — that switch is made from the lie.
 export function recommendClubIndex(effectiveDist) {
   let best = 0;
   let bestErr = Infinity;
-  for (let i = 0; i < CLUBS.length; i++) {
+  for (let i = 0; i < PUTTER_IDX; i++) {
     const err = Math.abs(CLUBS[i].carry - effectiveDist);
     if (err < bestErr) {
       bestErr = err;

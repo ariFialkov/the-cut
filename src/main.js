@@ -3,7 +3,7 @@
 import * as THREE from 'three';
 import { generateHole, disposeHole } from './course.js';
 import { BallFlight, BALL_R, clubLaunchSpeed, simulateToRest, solveBotShot } from './physics.js';
-import { CLUBS, recommendClubIndex, fmtDist, yd } from './clubs.js';
+import { CLUBS, PUTTER_IDX, isWedge, STYLES, recommendClubIndex, fmtDist, yd } from './clubs.js';
 import { SwingController, shotFromMetrics } from './swing.js';
 import {
   PLAYER_LOOK,
@@ -228,6 +228,7 @@ let phase = 'menu'; // menu | aim | swing | flight | bots | board | done
 let aimTheta = 0;
 let aimHold = 0;
 let clubIdx = 6;
+let wedgeStyle = 'chip'; // chip | flop | bump, resets each shot
 let playerBall = makeBallMesh();
 playerBall.visible = false;
 scene.add(playerBall);
@@ -313,6 +314,12 @@ addEventListener('keydown', (e) => {
   if (phase === 'aim') {
     if (e.code === 'KeyQ') changeClub(-1);
     if (e.code === 'KeyE') changeClub(1);
+    if (e.code === 'KeyS' && isWedge(CLUBS[clubIdx])) {
+      const order = ['chip', 'flop', 'bump'];
+      wedgeStyle = order[(order.indexOf(wedgeStyle) + 1) % order.length];
+      sfx.click();
+      refreshAimUI();
+    }
   }
 });
 addEventListener('keyup', (e) => keys.delete(e.code));
@@ -362,7 +369,8 @@ const swingCtl = new SwingController(canvas, {
   },
   onProgress(backFrac, pts, ph) {
     if (phase !== 'aim') return;
-    setPose(playerRig, -Math.min(backFrac, 1));
+    const amp = CLUBS[clubIdx].id === 'PT' ? 0.22 : 1; // putts are compact
+    setPose(playerRig, -Math.min(backFrac, 1) * amp);
     ui.drawTrail(pts, ph);
   },
   onStrike(metrics, pts) {
@@ -477,11 +485,19 @@ function golferToGate(bi) {
 
 function refreshAimUI() {
   const club = CLUBS[clubIdx];
-  ui.setClub(club);
-  ui.setPinDist(pinDistOf(playerBall.position));
+  const pinD = pinDistOf(playerBall.position);
+  const style = isWedge(club) ? STYLES[wedgeStyle] : null;
+  const carryEst = club.id === 'PT' ? pinD : club.carry * (style ? style.carryMul : 1);
+  ui.setClub(club, carryEst, style && style.key !== 'chip' ? style.label : null);
+  ui.setStyleRow(isWedge(club) ? wedgeStyle : null, (pick) => {
+    wedgeStyle = pick;
+    sfx.click();
+    refreshAimUI();
+  });
+  ui.setPinDist(pinD);
   // target ring at expected carry along aim
   const dir = aimDir();
-  const carry = Math.min(club.carry, 260);
+  const carry = Math.min(carryEst, 260);
   const t = new THREE.Vector3().copy(playerBall.position).addScaledVector(dir, carry);
   t.y = hole.heightAt(t.x, t.z) + 0.08;
   aimRing.position.copy(t);
@@ -802,12 +818,44 @@ function beginAim() {
   ui.setControlsVisible(true);
   ui.setStep(game.holeIdx, -1);
   aimTheta = 0;
-  clubIdx = recommendClubIndex(effectiveDist()); // fresh caddie pick per lie
+  wedgeStyle = 'chip';
+  // fresh caddie pick per lie — on the putting surface it's the putter
+  const surf = hole.surfaceAt(playerBall.position.x, playerBall.position.z);
+  const fullMode = game.mode === 'strokes' || game.mode === 'race';
+  clubIdx =
+    fullMode && (surf === 'green' || surf === 'fringe')
+      ? PUTTER_IDX
+      : recommendClubIndex(effectiveDist());
   refreshAimUI();
   setPose(playerRig, 0);
   placeGolferAtBall(playerRig, aimDir());
   setCam(aimCam, { damp: 5 });
   swingCtl.setEnabled(true);
+}
+
+// A putt is pure roll: backswing length is the throttle, calibrated so a
+// full stroke runs ~1.35x the distance to the cup. The green's real slopes
+// then break the ball on its way.
+function puttFromMetrics(m, pinDist) {
+  const maxRoll = Math.max(4, pinDist * 1.35);
+  const p = clamp(0.12 + 0.92 * Math.min(m.backFrac, 1.1), 0.1, 1.2);
+  let roll = maxRoll * p;
+  roll *= 1 - 0.12 * m.wobble; // chunky stroke comes up short
+  roll *= 1 + clamp(m.paceRatio - 1, -0.4, 0.6) * 0.1;
+  const v0 = Math.sqrt(2 * 2.7 * roll);
+  const pushDeg = clamp(m.angleDeg * 0.3, -5, 5) + (Math.random() * 2 - 1) * m.scatter * 2.2;
+  const quality = 1 - clamp(0.5 * m.wobble + 0.3 * m.scatter + 0.2 * Math.abs(m.paceRatio - 1), 0, 1);
+  const grade =
+    quality > 0.85
+      ? 'PURE ROLL'
+      : m.wobble > 0.5
+        ? 'Wobbled'
+        : m.paceRatio > 1.35
+          ? 'Charged!'
+          : m.paceRatio < 0.65
+            ? 'Babied'
+            : 'Rolled';
+  return { v0, loftDeg: 1, curveDeg: 0, pushDeg, power: p, quality, grade };
 }
 
 // player strike -> physics flight
@@ -819,18 +867,32 @@ function onStrike(metrics, _pts) {
   hideAimUI();
 
   const club = CLUBS[clubIdx];
-  const shot = shotFromMetrics(metrics, club, clubLaunchSpeed(club), Math.random);
+  const putting = club.id === 'PT';
+  let shot;
+  if (putting) {
+    shot = puttFromMetrics(metrics, pinDistOf(playerBall.position));
+  } else {
+    const style = isWedge(club) ? STYLES[wedgeStyle] : STYLES.chip;
+    const effClub = { ...club, loft: clamp(club.loft * style.loftMul, 6, 72) };
+    shot = shotFromMetrics(metrics, effClub, clubLaunchSpeed(club) * style.v0Mul, Math.random);
+  }
 
   // fx
-  sfx.strike(shot.quality);
-  shakeCam(0.12 + shot.quality * 0.35);
-  punchFov(4 + shot.quality * 6);
+  if (putting) {
+    sfx.bounce();
+    shakeCam(0.05);
+    punchFov(1.5);
+  } else {
+    sfx.strike(shot.quality);
+    shakeCam(0.12 + shot.quality * 0.35);
+    punchFov(4 + shot.quality * 6);
+  }
   const gradeColor =
     shot.grade === 'PURE!' ? '#ffd24a' : shot.quality > 0.75 ? '#35e07c' : shot.quality > 0.5 ? '#fff' : '#ff8a7f';
   ui.showFeedback(shot.grade, gradeColor);
 
   // golfer follow-through
-  swingTween = { t: 0, rig: playerRig };
+  swingTween = { t: 0, rig: playerRig, amp: putting ? 0.22 : 1 };
 
   const dir = aimDir().applyAxisAngle(UP, (-shot.pushDeg * Math.PI) / 180);
   const flightParams = {
@@ -2248,7 +2310,7 @@ function frame() {
   if (swingTween) {
     swingTween.t += dt;
     const k = Math.min(1, swingTween.t / 0.16);
-    setPose(swingTween.rig, -1 + k * 2);
+    setPose(swingTween.rig, (-1 + k * 2) * (swingTween.amp || 1));
     if (k >= 1) swingTween = null;
   }
 

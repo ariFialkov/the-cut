@@ -317,3 +317,13 @@ button { font: inherit; color: inherit; border: 0; background: none; cursor: poi
 }
 .race-status .rs-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
 .race-status .rs-row.in { color: var(--green); }
+
+/* ---------- wedge shot styles ---------- */
+.style-row { display: flex; gap: 6px; }
+.style-btn {
+  padding: 7px 14px; border-radius: 999px;
+  background: var(--glass); backdrop-filter: blur(4px);
+  font-size: 12px; font-weight: 800; letter-spacing: 0.08em;
+  border: 2px solid transparent; opacity: 0.8;
+}
+.style-btn.sel { border-color: var(--green); color: var(--green); opacity: 1; }

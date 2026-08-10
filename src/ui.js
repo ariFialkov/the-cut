@@ -45,6 +45,7 @@ export class UI {
       aimRight: $('aim-right'),
       clubPrev: $('club-prev'),
       clubNext: $('club-next'),
+      styleRow: $('style-row'),
       ffwd: $('ffwd'),
       btnPlay: $('btn-play'),
       toast: $('toast'),
@@ -214,9 +215,25 @@ export class UI {
     $('pill-wind').style.opacity = mph < 1 ? 0.45 : 1;
   }
 
-  setClub(club, effNote) {
+  // carryM: style-adjusted landing distance; for the putter pass the pin
+  // distance and it reads as the line length
+  setClub(club, carryM, styleLabel) {
     $('club-name').textContent = club.name.toUpperCase();
-    $('club-carry').textContent = `${yd(club.carry)} yd${effNote ? ' · ' + effNote : ''}`;
+    $('club-carry').textContent =
+      club.id === 'PT'
+        ? `${fmtDist(carryM)} putt`
+        : `${yd(carryM)} yd${styleLabel ? ' · ' + styleLabel.toLowerCase() : ''}`;
+  }
+
+  // styleKey shows + highlights the wedge style row; null hides it
+  setStyleRow(styleKey, onPick) {
+    const row = this.el.styleRow;
+    row.classList.toggle('hidden', !styleKey);
+    if (!styleKey) return;
+    row.querySelectorAll('.style-btn').forEach((b) => {
+      b.classList.toggle('sel', b.dataset.style === styleKey);
+      b.onclick = () => onPick(b.dataset.style);
+    });
   }
 
   showFfwd(v) {
@@ -231,6 +248,7 @@ export class UI {
     document.querySelector('.club-select').classList[method]('hidden');
     this.el.swingHint.classList[method]('hidden');
     document.querySelector('.hud-pills').classList[method]('hidden');
+    if (!v) this.el.styleRow.classList.add('hidden');
   }
 
   showFeedback(text, color = '#fff', ms = 1300) {
