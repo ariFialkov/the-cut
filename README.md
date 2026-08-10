@@ -42,6 +42,19 @@ Wind, elevated or sunken greens, island greens, forced carries, canyons and
 bunker complexes are all generated per hole — most holes want a moment of
 thought before you pull a club.
 
+Each hole of a game is a different contest:
+
+1. **Closest to the pin** — one swing, furthest from the pin is cut.
+2. **Stroke play** — a full hole (usually a par 4): play until you hole out
+   (1.1 m gimme, water costs a penalty drop). Most strokes is cut; ties go to
+   the longest tee shot.
+3. **Time race** — a full par 4 against the clock, and between shots you
+   **drive a golf cart** to your ball (steer with the screen edges / A-D;
+   water slows you down). Slowest to hole out is cut. No fast-forward here —
+   time is the score.
+4. **Head-to-head** — closest to the pin; the semifinal winner hits second.
+5. **The Wheel** — the champion's bonus shot at the prize wheel.
+
 ## The betting model (read this before auditing the "AI")
 
 This is a **simulated-multiplayer betting game**, not a skill contest. The four
@@ -58,6 +71,14 @@ deterministic while the *show* is real:
 - Each bot is also assigned a finishing position, which fixes exactly who gets
   cut on every hole. The four opponents are drawn per game from a bank of ten
   parody pros (articulated low-poly rigs with distinct outfits).
+- Stroke play and the race stay deterministic the same way: each player
+  stroke's outcome is pre-simulated at contact, so the holing stroke is known
+  the moment it is struck. Bots that must beat the player hole out on that
+  same concurrent stroke (in the race, they drop their putt during the
+  player's ball flight); bots that must lose stall near the green and finish
+  just behind — one stroke worse, or a few seconds slower. On the player's
+  elimination holes every bot also outdrives their tee shot so the stroke-play
+  tiebreak can never rescue them.
 - The head-to-head final honors the semifinal: whoever wins hole 3 hits
   **second** in the final. The player may only be dealt the semifinal win when
   they are scripted to lose the final — the bot then opens with a sub-2-foot
