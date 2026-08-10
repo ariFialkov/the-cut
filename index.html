@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+  <title>The Cut — Closest to the Pin</title>
+  <meta name="description" content="5 golfers. 5 holes. Survive the cut, take the pot." />
+  <meta name="theme-color" content="#0c1512" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="icons/icon-192.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <link rel="stylesheet" href="styles.css" />
+  <script type="importmap">
+    { "imports": { "three": "./lib/three.module.js" } }
+  </script>
+</head>
+<body>
+  <canvas id="gl"></canvas>
+  <canvas id="trail"></canvas>
+
+  <div id="ui">
+    <!-- ============ MENU ============ -->
+    <div id="menu" class="screen">
+      <div class="menu-top">
+        <div class="logo">THE<span>CUT</span></div>
+        <div class="tagline">5 golfers · 5 holes · last one standing takes the pot</div>
+      </div>
+      <div class="menu-bottom">
+        <div id="menu-hole-info" class="hole-info"></div>
+        <div class="bet-panel">
+          <div class="bet-label">YOUR BET <span class="balance">🪙 <b id="menu-balance">0</b></span></div>
+          <div id="bet-row" class="bet-row"></div>
+          <div class="paytable">1st <b>×3.0</b> · 2nd <b>×1.4</b> · 3rd <b>×0.4</b> <span class="rtp">RTP 96%</span></div>
+        </div>
+        <button id="btn-play" class="btn-primary">TEE OFF</button>
+        <button id="btn-howto" class="btn-ghost">How to play</button>
+      </div>
+    </div>
+
+    <!-- ============ HOW TO PLAY ============ -->
+    <div id="howto" class="overlay hidden">
+      <div class="panel">
+        <h2>How to play</h2>
+        <p><b>Aim</b> — hold the <b>left / right edges</b> of the screen (or <b>A / D</b> keys).</p>
+        <p><b>Club</b> — the caddie pre-selects one for the distance &amp; wind. Swap with ‹ › (or <b>Q / E</b>).</p>
+        <p><b>Swing</b> — drag <b>down</b> to take the club back, then push <b>up</b> through the ball in one motion.</p>
+        <ul>
+          <li><b>Straight</b> stroke → straight ball. Skew right = slice, left = hook.</li>
+          <li><b>Clean</b> stroke (no wiggles) → full distance.</li>
+          <li><b>Pace</b> — not too fast (low bullet), not too slow (ballooned).</li>
+          <li><b>Smooth</b> — jerky speed sprays your aim.</li>
+        </ul>
+        <p>Each hole, the golfer <b>furthest from the pin</b> is cut. Outlast everyone for the top prize.</p>
+        <button id="btn-howto-close" class="btn-primary">Got it</button>
+      </div>
+    </div>
+
+    <!-- ============ LOBBY ============ -->
+    <div id="lobby" class="overlay hidden">
+      <div class="panel lobby-panel">
+        <div class="lobby-title">FINDING PLAYERS</div>
+        <ul id="lobby-list"></ul>
+        <div id="lobby-status" class="lobby-status">Searching…</div>
+      </div>
+    </div>
+
+    <!-- ============ HUD ============ -->
+    <div id="hud" class="screen hidden">
+      <div class="hud-top">
+        <div class="hud-hole">
+          <div id="hud-hole-num">HOLE 1</div>
+          <div id="hud-hole-name" class="dim"></div>
+        </div>
+        <div id="stepper" class="stepper"></div>
+        <div class="hud-wallet">🪙 <span id="hud-balance">0</span></div>
+      </div>
+      <div class="hud-pills">
+        <div class="pill" id="pill-pin">⛳ <b id="hud-pin">0</b> yd</div>
+        <div class="pill" id="pill-wind"><span id="wind-arrow">➤</span> <b id="hud-wind">0</b> mph</div>
+      </div>
+      <div id="aim-left" class="aim-zone aim-left"><span>◀</span></div>
+      <div id="aim-right" class="aim-zone aim-right"><span>▶</span></div>
+      <div id="feedback" class="feedback hidden"></div>
+      <div id="shot-result" class="shot-result hidden"></div>
+      <div class="hud-bottom">
+        <div id="swing-hint" class="swing-hint">drag <b>↓</b> then <b>↑</b> to swing</div>
+        <div class="club-select">
+          <button id="club-prev" class="club-btn">‹</button>
+          <div class="club-face">
+            <div id="club-name">7 IRON</div>
+            <div id="club-carry" class="dim">167 yd</div>
+          </div>
+          <button id="club-next" class="club-btn">›</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ BANNER ============ -->
+    <div id="banner" class="banner hidden">
+      <div id="banner-big"></div>
+      <div id="banner-sub"></div>
+    </div>
+
+    <!-- ============ LEADERBOARD ============ -->
+    <div id="board" class="overlay hidden">
+      <div class="panel board-panel">
+        <div class="board-title" id="board-title">CLOSEST TO THE PIN</div>
+        <ul id="board-list"></ul>
+        <div id="cut-line" class="cut-line hidden">— THE CUT —</div>
+      </div>
+    </div>
+
+    <!-- ============ RESULTS ============ -->
+    <div id="results" class="overlay hidden">
+      <div class="panel results-panel">
+        <div id="results-title" class="results-title"></div>
+        <div id="results-pos" class="results-pos"></div>
+        <div id="results-payout" class="results-payout"></div>
+        <ul id="results-standings"></ul>
+        <div class="results-balance">Balance: 🪙 <b id="results-balance">0</b></div>
+        <button id="btn-again" class="btn-primary">PLAY AGAIN</button>
+        <button id="btn-menu" class="btn-ghost">Menu</button>
+      </div>
+    </div>
+
+    <div id="toast" class="toast hidden"></div>
+  </div>
+
+  <script type="module" src="src/main.js"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+    }
+  </script>
+</body>
+</html>

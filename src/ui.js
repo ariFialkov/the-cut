@@ -1,0 +1,310 @@
+// DOM layer: menus, HUD, lobby, leaderboard, results. main.js drives it.
+
+import { BETS } from './economy.js';
+import { fmtDist, yd } from './clubs.js';
+
+const $ = (id) => document.getElementById(id);
+
+export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+export class UI {
+  constructor() {
+    this.el = {
+      menu: $('menu'),
+      hud: $('hud'),
+      howto: $('howto'),
+      lobby: $('lobby'),
+      lobbyList: $('lobby-list'),
+      lobbyStatus: $('lobby-status'),
+      board: $('board'),
+      boardTitle: $('board-title'),
+      boardList: $('board-list'),
+      cutLine: $('cut-line'),
+      banner: $('banner'),
+      bannerBig: $('banner-big'),
+      bannerSub: $('banner-sub'),
+      results: $('results'),
+      feedback: $('feedback'),
+      shotResult: $('shot-result'),
+      stepper: $('stepper'),
+      swingHint: $('swing-hint'),
+      aimLeft: $('aim-left'),
+      aimRight: $('aim-right'),
+      clubPrev: $('club-prev'),
+      clubNext: $('club-next'),
+      btnPlay: $('btn-play'),
+      toast: $('toast'),
+      trail: $('trail'),
+    };
+    this.trailCtx = this.el.trail.getContext('2d');
+    this._sizeTrail();
+    addEventListener('resize', () => this._sizeTrail());
+
+    $('btn-howto').addEventListener('click', () => this.el.howto.classList.remove('hidden'));
+    $('btn-howto-close').addEventListener('click', () => this.el.howto.classList.add('hidden'));
+
+    this.bet = BETS[1];
+    this._buildBetRow();
+    this._buildStepper();
+  }
+
+  _sizeTrail() {
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    this.el.trail.width = innerWidth * dpr;
+    this.el.trail.height = innerHeight * dpr;
+    this.trailCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+
+  // ---------- menu ----------
+  _buildBetRow() {
+    const row = $('bet-row');
+    row.innerHTML = '';
+    for (const b of BETS) {
+      const chip = document.createElement('div');
+      chip.className = 'bet-chip';
+      chip.textContent = b;
+      chip.dataset.bet = b;
+      chip.addEventListener('click', () => {
+        this.bet = b;
+        this._refreshChips();
+        this.onBetChange && this.onBetChange(b);
+      });
+      row.appendChild(chip);
+    }
+    this._refreshChips();
+  }
+
+  _refreshChips() {
+    document.querySelectorAll('.bet-chip').forEach((c) => {
+      const v = Number(c.dataset.bet);
+      c.classList.toggle('sel', v === this.bet);
+      c.classList.toggle('broke', v > this.balance);
+    });
+  }
+
+  setBalance(b) {
+    this.balance = b;
+    $('menu-balance').textContent = Math.round(b);
+    $('hud-balance').textContent = Math.round(b);
+    if (this.bet > b) {
+      const ok = BETS.filter((x) => x <= b);
+      this.bet = ok.length ? ok[ok.length - 1] : BETS[0];
+    }
+    this._refreshChips();
+    this.el.btnPlay.textContent = b < BETS[0] ? 'CLAIM 1000 FREE COINS' : 'TEE OFF';
+  }
+
+  setMenuHoleInfo(text) {
+    $('menu-hole-info').textContent = text;
+  }
+
+  showMenu() {
+    this.el.menu.classList.remove('hidden');
+    this.el.hud.classList.add('hidden');
+    this.el.results.classList.add('hidden');
+    this.el.board.classList.add('hidden');
+  }
+
+  // ---------- lobby ----------
+  async runLobby(roster, ourIdx) {
+    this.el.menu.classList.add('hidden');
+    this.el.lobby.classList.remove('hidden');
+    this.el.lobbyList.innerHTML = '';
+    this.el.lobbyStatus.textContent = 'Searching…';
+    const add = (p, you) => {
+      const li = document.createElement('li');
+      li.innerHTML = `<span class="dot" style="background:${p.shirt}"></span><span class="${you ? 'you' : ''}">${p.name}${you ? ' (you)' : ''}</span>`;
+      this.el.lobbyList.appendChild(li);
+    };
+    add(roster[ourIdx], true);
+    await sleep(500);
+    for (let i = 0; i < roster.length; i++) {
+      if (i === ourIdx) continue;
+      add(roster[i], false);
+      this.el.lobbyStatus.textContent = `${this.el.lobbyList.children.length} / 5 players`;
+      await sleep(340 + Math.random() * 420);
+    }
+    this.el.lobbyStatus.textContent = 'Lobby full — good luck!';
+    await sleep(900);
+    this.el.lobby.classList.add('hidden');
+  }
+
+  // ---------- HUD ----------
+  _buildStepper() {
+    this.el.stepper.innerHTML = '';
+    const labels = ['1', '2', '3', '4', '⛳'];
+    for (let i = 0; i < 5; i++) {
+      const d = document.createElement('div');
+      d.className = 'step';
+      d.textContent = labels[i];
+      this.el.stepper.appendChild(d);
+    }
+  }
+
+  setStep(cur, playerDeadAt = -1) {
+    [...this.el.stepper.children].forEach((d, i) => {
+      d.className = 'step';
+      if (playerDeadAt >= 0 && i >= playerDeadAt) d.classList.add('dead');
+      else if (i < cur) d.classList.add('done');
+      else if (i === cur) d.classList.add('cur');
+    });
+  }
+
+  showHud() {
+    this.el.hud.classList.remove('hidden');
+    this.el.menu.classList.add('hidden');
+  }
+
+  setHole(num, name, lengthM) {
+    $('hud-hole-num').textContent = `HOLE ${num}`;
+    $('hud-hole-name').textContent = `“${name}” · ${yd(lengthM)} yd`;
+  }
+
+  setPinDist(m) {
+    $('hud-pin').textContent = yd(m);
+  }
+
+  // relDeg: wind direction relative to camera forward, degrees
+  setWind(mph, relDeg) {
+    $('hud-wind').textContent = Math.round(mph);
+    $('wind-arrow').style.transform = `rotate(${relDeg - 90}deg)`;
+    $('pill-wind').style.opacity = mph < 1 ? 0.45 : 1;
+  }
+
+  setClub(club, effNote) {
+    $('club-name').textContent = club.name.toUpperCase();
+    $('club-carry').textContent = `${yd(club.carry)} yd${effNote ? ' · ' + effNote : ''}`;
+  }
+
+  setControlsVisible(v) {
+    const method = v ? 'remove' : 'add';
+    this.el.aimLeft.classList[method]('hidden');
+    this.el.aimRight.classList[method]('hidden');
+    document.querySelector('.club-select').classList[method]('hidden');
+    this.el.swingHint.classList[method]('hidden');
+    document.querySelector('.hud-pills').classList[method]('hidden');
+  }
+
+  showFeedback(text, color = '#fff', ms = 1300) {
+    const f = this.el.feedback;
+    f.textContent = text;
+    f.style.color = color;
+    f.classList.remove('hidden');
+    // retrigger animation
+    f.style.animation = 'none';
+    void f.offsetWidth;
+    f.style.animation = '';
+    clearTimeout(this._fbT);
+    this._fbT = setTimeout(() => f.classList.add('hidden'), ms);
+  }
+
+  showShotResult(text, ms = 2400) {
+    const s = this.el.shotResult;
+    s.textContent = text;
+    s.classList.remove('hidden');
+    clearTimeout(this._srT);
+    this._srT = setTimeout(() => s.classList.add('hidden'), ms);
+  }
+
+  async showBanner(big, sub = '', ms = 1600) {
+    this.el.bannerBig.textContent = big;
+    this.el.bannerSub.textContent = sub;
+    this.el.banner.classList.remove('hidden');
+    this.el.banner.style.animation = 'none';
+    void this.el.banner.offsetWidth;
+    this.el.banner.style.animation = '';
+    await sleep(ms);
+    this.el.banner.classList.add('hidden');
+  }
+
+  toast(text, ms = 1800) {
+    this.el.toast.textContent = text;
+    this.el.toast.classList.remove('hidden');
+    clearTimeout(this._toastT);
+    this._toastT = setTimeout(() => this.el.toast.classList.add('hidden'), ms);
+  }
+
+  // ---------- swing trail ----------
+  drawTrail(pts, phase) {
+    const ctx = this.trailCtx;
+    ctx.clearRect(0, 0, innerWidth, innerHeight);
+    if (!pts || pts.length < 2) return;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = phase === 'fwd' ? 'rgba(53,224,124,0.9)' : 'rgba(255,255,255,0.55)';
+    ctx.lineWidth = 7;
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+    ctx.stroke();
+    // ball marker at the start point
+    ctx.fillStyle = 'rgba(255,255,255,0.9)';
+    ctx.beginPath();
+    ctx.arc(pts[0].x, pts[0].y, 6, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  clearTrail() {
+    this.trailCtx.clearRect(0, 0, innerWidth, innerHeight);
+  }
+
+  // ---------- leaderboard ----------
+  // rows: [{name, color, dist, isPlayer, wet, cut, ace}] pre-sorted
+  async showBoard(title, rows, showCutLine) {
+    this.el.boardTitle.textContent = title;
+    this.el.board.classList.remove('hidden');
+    this.el.cutLine.classList.add('hidden');
+    const list = this.el.boardList;
+    list.innerHTML = '';
+    const items = rows.map((r, i) => {
+      const li = document.createElement('li');
+      if (r.isPlayer) li.classList.add('me');
+      if (r.cut) li.classList.add('cutrow');
+      const distTxt = r.ace ? 'ACE! 🏆' : `${r.wet ? '💦 ' : ''}${fmtDist(r.dist)}`;
+      li.innerHTML = `<span class="rank">${i + 1}</span><span class="dot" style="background:${r.color}"></span><span>${r.name}</span><span class="dist">${distTxt}</span>`;
+      list.appendChild(li);
+      return li;
+    });
+    for (const li of items) {
+      await sleep(230);
+      li.classList.add('show');
+    }
+    if (showCutLine) {
+      await sleep(450);
+      this.el.cutLine.classList.remove('hidden');
+    }
+  }
+
+  hideBoard() {
+    this.el.board.classList.add('hidden');
+  }
+
+  // ---------- results ----------
+  showResults({ pos, payout, bet, balance, standings, onAgain, onMenu }) {
+    const r = this.el.results;
+    r.classList.remove('hidden');
+    const ordinal = ['1st', '2nd', '3rd', '4th', '5th'][pos - 1];
+    $('results-title').textContent = pos === 1 ? 'CHAMPION' : pos <= 3 ? 'IN THE MONEY' : 'CUT';
+    const posEl = $('results-pos');
+    posEl.textContent = pos === 1 ? '🏆 1st' : ordinal;
+    posEl.className = 'results-pos ' + (pos === 1 ? 'win' : pos > 3 ? 'lose' : '');
+    $('results-payout').textContent = payout > 0 ? `+${payout.toFixed(0)} 🪙 (bet ${bet})` : `bet ${bet} lost`;
+    const ul = $('results-standings');
+    ul.innerHTML = '';
+    standings.forEach((s) => {
+      const li = document.createElement('li');
+      if (s.isPlayer) li.classList.add('me');
+      li.innerHTML = `<span class="pos">${['1st', '2nd', '3rd', '4th', '5th'][s.pos - 1]}</span><span class="dot" style="background:${s.color};width:12px;height:12px;border-radius:50%;align-self:center;flex:none"></span><span>${s.name}</span><span class="prize">${s.prize > 0 ? '+' + s.prize.toFixed(0) : ''}</span>`;
+      ul.appendChild(li);
+    });
+    $('results-balance').textContent = Math.round(balance);
+    $('btn-again').onclick = () => {
+      r.classList.add('hidden');
+      onAgain();
+    };
+    $('btn-menu').onclick = () => {
+      r.classList.add('hidden');
+      onMenu();
+    };
+  }
+}
