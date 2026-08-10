@@ -112,10 +112,25 @@ export class BallFlight {
       p.addScaledVector(v, h);
       if (p.y > this.apex) this.apex = p.y;
 
+      // descending through the water surface inside a water feature
+      if (
+        hole.hasWater &&
+        v.y < 0 &&
+        p.y <= hole.waterLevel + BALL_R &&
+        hole.inWaterZone &&
+        hole.inWaterZone(p.x, p.z)
+      ) {
+        p.y = hole.waterLevel;
+        this.done = true;
+        this.inWater = true;
+        out.push({ type: 'splash', pos: p.clone(), speed: v.length() });
+        return;
+      }
+
       const ground = hole.heightAt(p.x, p.z);
       if (p.y <= ground + BALL_R) {
         const surf = hole.surfaceAt(p.x, p.z);
-        if (surf === 'water' || ground + BALL_R < hole.waterLevel) {
+        if (surf === 'water') {
           p.y = Math.max(hole.waterLevel, ground + BALL_R);
           this.done = true;
           this.inWater = true;

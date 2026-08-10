@@ -262,6 +262,11 @@ export function generateHole(seed, idx) {
     surfaceAt,
     waterLevel,
     hasWater,
+    // true only where a water feature actually is — the water level can sit
+    // higher than dry ground elsewhere on the hole, so physics must never
+    // infer "underwater" from height alone
+    inWaterZone: (x, z) =>
+      hasWater && waterFn(x, z, -z / L, Math.hypot(x - gx, z - gz)) > 0.03,
     wind,
     windSpeed,
     bunkers,
