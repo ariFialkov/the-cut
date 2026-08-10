@@ -86,14 +86,66 @@ export function buildCart(accent = '#e8453c') {
     wheels.push(w);
   }
 
+  // pontoons: stowed against the body, deploy in water
+  const pontoons = [];
+  const pGeo = new THREE.CapsuleGeometry(0.17, 1.55, 3, 8);
+  pGeo.rotateX(Math.PI / 2);
+  for (const side of [-1, 1]) {
+    const p = new THREE.Mesh(pGeo, M('#f4f6f8'));
+    const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.05, 1.2), M(accent));
+    stripe.position.y = 0.1;
+    p.add(stripe);
+    p.position.set(side * 0.62, 0.55, 0.02);
+    p.scale.setScalar(0.01);
+    p.visible = false;
+    g.add(p);
+    pontoons.push(p);
+  }
+
+  // golf bag with clubs in the rear well
+  const bag = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.14, 0.55, 8), M(accent));
+  bag.add(body);
+  const pocket = new THREE.Mesh(new THREE.CylinderGeometry(0.175, 0.17, 0.16, 8), M('#1d2025'));
+  pocket.position.y = -0.12;
+  bag.add(pocket);
+  for (let i = 0; i < 3; i++) {
+    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.013, 0.013, 0.42, 5), M('#c9ccd1'));
+    shaft.position.set((i - 1) * 0.07, 0.45, (i % 2) * 0.05 - 0.02);
+    shaft.rotation.z = (i - 1) * 0.12;
+    bag.add(shaft);
+    const head = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.05, 0.09), M('#33383f'));
+    head.position.set((i - 1) * 0.07 - (i - 1) * 0.025, 0.66, (i % 2) * 0.05 - 0.02);
+    bag.add(head);
+  }
+  bag.position.set(0, 0.95, -0.8);
+  bag.rotation.x = -0.22;
+  g.add(bag);
+
   g.traverse((o) => (o.castShadow = true));
 
   return {
     group: g,
     wheels,
-    // spin wheels with travel
+    pontoons,
+    waterMix: 0,
+    // spin wheels with travel (they freewheel slower as a boat)
     update(dist) {
-      for (const w of wheels) w.rotation.x += dist / 0.23;
+      for (const w of wheels) w.rotation.x += (dist / 0.23) * (1 - this.waterMix * 0.8);
+    },
+    // 0 = cart, 1 = boat: wheels tuck up into the body, pontoons deploy
+    setWater(f) {
+      this.waterMix = f;
+      for (const w of wheels) {
+        w.position.y = 0.23 + f * 0.34;
+        w.scale.setScalar(1 - f * 0.4);
+      }
+      for (const p of pontoons) {
+        p.visible = f > 0.02;
+        p.position.y = 0.55 - f * 0.45;
+        const s = 0.01 + f * 0.99;
+        p.scale.set(s, s, s);
+      }
     },
   };
 }

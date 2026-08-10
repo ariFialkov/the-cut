@@ -171,6 +171,50 @@ function spawnRing(pos, color, maxScale = 4, dur = 0.6) {
   fxRings.push({ m, t: 0, dur, maxScale });
 }
 
+// neon "YOU" beacon floating over the player's ball while driving
+let youSign = null;
+function buildYouSign() {
+  const c = document.createElement('canvas');
+  c.width = 256;
+  c.height = 160;
+  const ctx = c.getContext('2d');
+  ctx.textAlign = 'center';
+  ctx.shadowColor = '#35e07c';
+  ctx.shadowBlur = 26;
+  ctx.fillStyle = '#c8ffdd';
+  ctx.font = '900 78px sans-serif';
+  ctx.fillText('YOU', 128, 78);
+  ctx.beginPath();
+  ctx.moveTo(104, 104);
+  ctx.lineTo(152, 104);
+  ctx.lineTo(128, 144);
+  ctx.closePath();
+  ctx.fillStyle = '#35e07c';
+  ctx.fill();
+  const tex = new THREE.CanvasTexture(c);
+  const sprite = new THREE.Sprite(
+    new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false })
+  );
+  sprite.scale.set(6, 3.75, 1);
+  const group = new THREE.Group();
+  group.add(sprite);
+  const beam = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.16, 0.34, 9, 8, 1, true),
+    new THREE.MeshBasicMaterial({
+      color: 0x35e07c,
+      transparent: true,
+      opacity: 0.22,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    })
+  );
+  beam.position.y = -5.5;
+  group.add(beam);
+  group.visible = false;
+  scene.add(group);
+  return { group, sprite };
+}
+
 // confetti
 let confetti = null;
 function spawnConfetti(center) {
@@ -245,6 +289,9 @@ let raceState = null; // hole-3 time race state
 const MODES = ['ctp', 'strokes', 'race', 'ctp', 'wheel'];
 const GIMME_R = 1.1; // inside this = automatic tap-in
 const HOLED_R = 0.55; // inside this = in the hole
+// putts get a friendlier cup: inside ~3ft drops, inside ~6.5ft is a gimme
+const PUTT_HOLED_R = 0.95;
+const PUTT_GIMME_R = 2.0;
 let celebrating = null;
 let dejected = null;
 let clockT = 0;
@@ -258,6 +305,9 @@ window.__thecut = {
   },
   get balance() {
     return balance;
+  },
+  get cartWater() {
+    return playerCart ? playerCart.cart.waterMix : 0;
   },
   autoSwing(q = 1) {
     if (phase !== 'aim') return false;
@@ -919,7 +969,9 @@ function onStrike(metrics, _pts) {
     }
   } else {
     game.pendingFull = predicted;
-    const predHoled = !predicted.inWater && pinDistOf(predicted.pos) < GIMME_R;
+    game.lastShotPutt = putting;
+    const gimme = putting ? PUTT_GIMME_R : GIMME_R;
+    const predHoled = !predicted.inWater && pinDistOf(predicted.pos) < gimme;
     if (game.mode === 'strokes') {
       launchBotStrokesRound(predicted, predHoled);
     } else if (game.mode === 'race' && predHoled) {
@@ -1027,6 +1079,9 @@ async function afterLandingFull(result) {
   const dist = pinDistOf(result.pos);
   let holed = false;
   game.playerStrokes++;
+  const putt = !!game.lastShotPutt;
+  const holedR = putt ? PUTT_HOLED_R : HOLED_R;
+  const gimmeR = putt ? PUTT_GIMME_R : GIMME_R;
 
   if (game.playerStrokes === 1) {
     game.playerTeeCarry = Math.hypot(result.pos.x - hole.tee.x, result.pos.z - hole.tee.z);
@@ -1041,12 +1096,12 @@ async function afterLandingFull(result) {
     playerBall.position.copy(drop);
     spawnRing(drop, 0xffffff, 1.5, 0.4);
     ui.showShotResult(`${ICO.wet} drop — hitting ${game.playerStrokes + 1}`, 1800);
-  } else if (dist < HOLED_R) {
+  } else if (dist < holedR) {
     holed = true;
     ui.showFeedback(game.playerStrokes === 1 ? 'ACE!!' : 'IN THE HOLE!', '#ffd24a', 1700);
     sfx.cheer();
     await sinkPlayerBall();
-  } else if (dist < GIMME_R) {
+  } else if (dist < gimmeR) {
     holed = true;
     game.playerStrokes++; // the tap-in
     ui.showFeedback('GIMME', '#35e07c', 1400);
@@ -1727,17 +1782,39 @@ function updateRaceStatus() {
   ui.setStatusRows(rows);
 }
 
-function moveBotCart(plan, x, z) {
+// Smoothly morph a cart between wheels and pontoons, floating it on the
+// water surface while it's in a water zone. Returns the y to use.
+function cartFloatY(cart, x, z, inWater, dt) {
+  const prev = cart.waterMix;
+  const target = inWater ? 1 : 0;
+  const mix = clamp(prev + Math.sign(target - prev) * dt * 2.6, 0, 1);
+  if (mix !== prev) {
+    cart.setWater(mix);
+    // the big splash at the moment of transformation
+    if ((prev < 0.5 && mix >= 0.5) || (prev > 0.5 && mix <= 0.5)) {
+      spawnRing(cart.group.position, 0x9fd8ff, 4, 0.8);
+      sfx.splash();
+    }
+  }
+  const ground = hole.heightAt(x, z);
+  if (mix <= 0.001) return ground;
+  const bob = Math.sin(clockT * 2.3 + x * 0.1) * 0.06;
+  const float = Math.max(ground, hole.waterLevel + 0.04 + bob);
+  return lerp(ground, float, mix);
+}
+
+function moveBotCart(plan, x, z, dt) {
   const g = plan.cart.group;
   const dx = x - g.position.x;
   const dz = z - g.position.z;
   const d = Math.hypot(dx, dz);
   if (d > 0.001) g.rotation.y = Math.atan2(dx, dz);
-  g.position.set(x, hole.heightAt(x, z), z);
+  const inWater = hole.inWaterZone(x, z);
+  g.position.set(x, cartFloatY(plan.cart, x, z, inWater, dt), z);
   plan.cart.update(d);
 }
 
-function advanceRacePlan(bi, plan) {
+function advanceRacePlan(bi, plan, dt) {
   if (plan.finished || !plan.ball) return;
   const t = raceState.t;
   if (plan.finishAt != null && t >= plan.finishAt) {
@@ -1772,7 +1849,7 @@ function advanceRacePlan(bi, plan) {
           Math.sin(Math.PI * k) * Math.max(6, s.from.distanceTo(s.to) * 0.08);
       } else {
         setBotRiding(plan, true);
-        moveBotCart(plan, lerp(s.from.x, s.to.x, k), lerp(s.from.z, s.to.z, k));
+        moveBotCart(plan, lerp(s.from.x, s.to.x, k), lerp(s.from.z, s.to.z, k), dt);
       }
       return;
     }
@@ -2247,7 +2324,7 @@ function frame() {
     if (raceState.running) {
       ui.setRaceTimer(raceState.playerTime ?? raceState.t);
     }
-    for (const [bi, plan] of raceState.plans) advanceRacePlan(bi, plan);
+    for (const [bi, plan] of raceState.plans) advanceRacePlan(bi, plan, dt);
   }
 
   // player cart driving
@@ -2268,7 +2345,7 @@ function frame() {
     // throttle & brake: W / joystick-up drives, S / joystick-down brakes,
     // no input coasts down
     const inWater = hole.inWaterZone(g.position.x, g.position.z);
-    const maxS = inWater ? 4.5 : 12;
+    const maxS = inWater ? 6 : 12;
     const target = Math.max(0, throttle) * maxS;
     const rate = throttle < 0 ? 18 : target > playerCart.speed ? 8 : 4;
     playerCart.speed = clamp(
@@ -2281,10 +2358,12 @@ function frame() {
     const step = playerCart.speed * dt;
     g.position.x = clamp(g.position.x + Math.sin(playerCart.heading) * step, -hole.halfW + 1, hole.halfW - 1);
     g.position.z = clamp(g.position.z + Math.cos(playerCart.heading) * step, hole.zMin + 1, hole.zMax - 1);
-    g.position.y = hole.heightAt(g.position.x, g.position.z);
+    g.position.y = cartFloatY(playerCart.cart, g.position.x, g.position.z, inWater, dt);
     g.rotation.y = playerCart.heading;
     playerCart.cart.update(step);
-    if (inWater && Math.random() < dt * 6) spawnRing(g.position, 0x9fd8ff, 2, 0.5);
+    if (inWater && playerCart.speed > 1 && Math.random() < dt * 6) {
+      spawnRing(g.position, 0x9fd8ff, 2, 0.5);
+    }
     setCam(
       () => {
         cam.pos.set(
@@ -2387,6 +2466,19 @@ function frame() {
   // the wheel idles while it hasn't been resolved
   if (wheelObj && wheelObj.spinning) {
     wheelObj.group.rotation.y += wheelObj.speed * dt;
+  }
+
+  // neon YOU beacon while driving
+  if (phase === 'cart') {
+    if (!youSign) youSign = buildYouSign();
+    youSign.group.visible = true;
+    const bp = playerBall.position;
+    youSign.group.position.set(bp.x, bp.y + 6.5 + Math.sin(clockT * 2) * 0.4, bp.z);
+    const dCam = camera.position.distanceTo(youSign.group.position);
+    const s = clamp(dCam * 0.045, 0.8, 2.6);
+    youSign.sprite.scale.set(6 * s, 3.75 * s, 1);
+  } else if (youSign) {
+    youSign.group.visible = false;
   }
 
   // ball ground shadow
