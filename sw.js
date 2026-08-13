@@ -1,12 +1,12 @@
 // Cache-first service worker so The Cut plays fully offline as a PWA.
 
-const VERSION = 'the-cut-v11';
+const VERSION = 'the-cut-v12';
 
 const ASSETS = [
   './',
   './index.html',
   './styles.css',
-  './manifest.webmanifest',
+  './manifest.json',
   './lib/three.module.js',
   './src/main.js',
   './src/course.js',

@@ -113,7 +113,7 @@ demo economy with a free refill when you bust.
 index.html            shell, DOM for all screens, import map
 styles.css            all UI styling
 sw.js                 offline cache (PWA)
-manifest.webmanifest  PWA manifest
+manifest.json         PWA manifest
 lib/three.module.js   vendored Three.js
 src/
   main.js       orchestrator: renderer, camera rig, game state machine
